@@ -1,0 +1,58 @@
+---
+title: Self-host
+description: Run PostPipe on your own machine or server with your own platform apps.
+---
+
+## Requirements
+
+- Node 24
+- pnpm 11.17
+- Docker
+- Supabase CLI
+
+## Steps
+
+1. Clone the repository.
+2. Run `pnpm install`.
+3. Run `supabase start`.
+4. Run `cp .env.example .env.local`.
+5. Make a token key with `openssl rand -base64 32` and set it as `TOKEN_KEY_V1`.
+6. Create your platform apps. Use the table below. Set `NEXT_PUBLIC_APP_URL` first, because it is part of every callback URL.
+7. Set `PUBLIC_PLATFORMS` to a comma list of every platform you have an approved app for. Platforms not in the list can still be used by an organisation that adds its own app in Settings.
+8. Run `docker compose up --build`.
+9. Open `http://localhost:3000`.
+
+### Platform apps
+
+| Platform | Where to create it | Keys to paste | Callback URL | Guide |
+|---|---|---|---|---|
+| X | developer.x.com, OAuth 2.0 Web App | `X_CLIENT_ID`, `X_CLIENT_SECRET` | `<NEXT_PUBLIC_APP_URL>/api/oauth/x/callback` | [App setup](/docs/platforms/x) |
+| LinkedIn | linkedin.com/developers | `LINKEDIN_CLIENT_ID`, `LINKEDIN_CLIENT_SECRET` | `<NEXT_PUBLIC_APP_URL>/api/oauth/linkedin/callback` | [App setup](/docs/platforms/linkedin) |
+| Facebook | developers.facebook.com, Facebook Login for Business | `META_APP_ID`, `META_APP_SECRET`, `META_LOGIN_CONFIG_ID` (required) | `<NEXT_PUBLIC_APP_URL>/api/oauth/facebook/callback` | [App setup](/docs/platforms/facebook) |
+| Instagram | developers.facebook.com, Instagram business login | `INSTAGRAM_APP_ID`, `INSTAGRAM_APP_SECRET` | `<NEXT_PUBLIC_APP_URL>/api/oauth/instagram/callback` | [App setup](/docs/platforms/instagram) |
+| Threads | developers.facebook.com, Threads use case | `THREADS_APP_ID`, `THREADS_APP_SECRET` | `<NEXT_PUBLIC_APP_URL>/api/oauth/threads/callback` | [App setup](/docs/platforms/threads) |
+| TikTok | developers.tiktok.com | `TIKTOK_CLIENT_KEY`, `TIKTOK_CLIENT_SECRET` | `<NEXT_PUBLIC_APP_URL>/api/oauth/tiktok/callback` | [App setup](/docs/platforms/tiktok) |
+| YouTube | Google Cloud, OAuth client (web) | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | `<NEXT_PUBLIC_APP_URL>/api/oauth/youtube/callback` | [App setup](/docs/platforms/youtube) |
+| Pinterest | developers.pinterest.com | `PINTEREST_APP_ID`, `PINTEREST_APP_SECRET` (and `PINTEREST_ENV`: `sandbox` or `production`) | `<NEXT_PUBLIC_APP_URL>/api/oauth/pinterest/callback` | [App setup](/docs/platforms/pinterest) |
+
+## What unapproved apps can do
+
+| Platform | Limit |
+|---|---|
+| X | Needs a funded X developer account (pay-per-use). |
+| LinkedIn | Personal posts work self-serve. Company pages need LinkedIn Community Management approval. |
+| Facebook | Without Meta App Review your app can post only for accounts that have a role on it. |
+| Instagram | Without Meta App Review your app can post only for accounts that have a role on it. |
+| Threads | Without Meta App Review your app can post only for accounts that have a role on it. |
+| TikTok | Unaudited TikTok apps post only for their own test accounts, as drafts to the inbox. |
+| YouTube | Google testing mode: up to 100 test users, private uploads, tokens expire after 7 days. |
+| Pinterest | Pinterest trial access creates private pins only. |
+
+## Known limits
+
+- TikTok webhook and Meta deauthorize and data-deletion routes verify with the deployment's global app secret only. An organisation's own app (added in Settings) does not use these callbacks yet.
+- Bluesky needs your own `BLUESKY_OAUTH_PRIVATE_JWK`. See the [Bluesky page](/docs/platforms/bluesky).
+
+## Licence
+
+PostPipe is licensed under AGPL-3.0.

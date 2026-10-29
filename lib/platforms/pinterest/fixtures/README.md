@@ -1,0 +1,1 @@
+Hand-written from docs/integrations/pinterest.md, not recorded. Tokens are fake. UNRECORDED until a live app exists. The sandbox cannot create video Pins (pinterest.md section 2), so video.json waits for a Standard account.

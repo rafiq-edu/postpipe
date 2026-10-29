@@ -1,0 +1,200 @@
+---
+title: "Pinterest integration (API v5)"
+---
+
+| Approval needed | Status | Works before approval | Blocked before approval | Timeline |
+|---|---|---|---|---|
+| Trial access (form), then Standard access (review with demo video) [pinterest.md] | NOT STARTED | Trial: 1,000 calls per day per app. Pins and boards are private to the creator [pinterest.md] | Real customers. Trial pins are private only [pinterest.md] | Trial: not published. Standard: 2 to 4+ weeks in community reports, not official [pinterest.md] |
+
+Read on 2026-10-27. Status for Postit: NOT STARTED.
+UNVERIFIED means: not found in official docs. Check before building.
+Note: some developers.pinterest.com pages (set-up-app, changelog, api-access) returned 404 to our fetch tool on 2026-10-27. Facts from them come from official search snippets and are marked.
+
+## 1. Overview
+
+What we can do with `POST /v5/pins` (https://github.com/pinterest/api-description, official OpenAPI file, v5.28.0):
+- Image Pin from a URL (`image_url`) or base64 (`image_base64`, JPEG or PNG only).
+- Carousel: `multiple_image_urls` or `multiple_image_base64`, 2 to 5 images.
+- Video Pin: upload video first, then use `video_id` with a cover image.
+- Fields: `title`, `description`, `link`, `alt_text`, `board_id`, `board_section_id`, `dominant_color` (hex like `#6E7874`).
+- Base URL: `https://api.pinterest.com/v5` (same OpenAPI file).
+- Create Pin is for new content made by the user. Pinterest says use the Save button for curated content (https://github.com/pinterest/api-description).
+
+Not found / not possible:
+- Notes: no `note` field in the PinCreate schema. UNVERIFIED that API supports Pin notes. The help center has a 250-char "textbox" for Pins (https://help.pinterest.com/en/article/review-pin-specs), but no API field was found.
+- Idea Pins: the docs say organic Pin formats are now only image or video Pins (https://developers.pinterest.com/docs/work-with-organic-content-and-users/create-boards-and-pins/, via search snippet). No Idea Pin endpoint found. Treat as not available.
+- Native scheduling: no schedule field in the Create Pin schema (https://github.com/pinterest/api-description). Postit must schedule on its own side. Guidelines allow scheduling only if the end user chooses each Pin (https://policy.pinterest.com/en/developer-guidelines).
+
+Account types:
+- The developer account that owns the app must be a business account (https://developers.pinterest.com/docs/getting-started/set-up-app/, via search snippet).
+- Whether the connecting end user must be a business account: UNVERIFIED. A 403 `PINNER_DATA_ACCESS_DENIED` note mentions "non-business users" for apps registered on or after 2026-09-14 (https://developers.pinterest.com/docs/work-with-organic-content-and-users/create-boards-and-pins/). That applies to read calls (Get board, Get Pin, list calls), not to create.
+
+## 2. App setup
+
+Steps (https://developers.pinterest.com/docs/getting-started/set-up-app/, via search snippet):
+1. Log in or create a Pinterest business account.
+2. Verify the email.
+3. Open My apps and accept the Developer Terms of Service.
+4. Choose Connect app, fill the form (app info, use case, privacy policy link), and request Trial access.
+
+- Redirect URIs: add under My apps > Manage > Configure > Redirect URIs. You can add many. The value must match exactly. It must not cause a second redirect. localhost is allowed for tests. (same page, snippet)
+- Privacy policy link is required when you apply (https://developers.pinterest.com/terms/, via search snippet). A Terms URL field: UNVERIFIED.
+- Limit of five apps per developer account (https://developers.pinterest.com/docs/faqs/faqs/).
+- Trial access: Pins and boards are visible only to their creator, as Sandbox entities. Rate limits are daily (https://developers.pinterest.com/docs/key-concepts/access-tiers/).
+- Cap on number of end users in Trial: UNVERIFIED (not stated in the docs we could read).
+- Standard access: see section 7.
+- Sandbox base URL: `https://api-sandbox.pinterest.com/v5` (https://developers.pinterest.com/docs/developer-tools/sandbox/).
+  - Needs a separate sandbox token. Production and sandbox tokens do not mix. Works with Trial or Standard.
+  - Sandbox does NOT support video Pin creation.
+  - Do not create sandbox Pins on group boards (the owner may be notified).
+  - A test token from the app page lasts 30 days.
+  - No sandbox-specific rate limits are stated.
+
+## 3. OAuth
+
+Authorization code flow (https://developers.pinterest.com/docs/getting-started/set-up-authentication-and-authorization/):
+- Authorize: `https://www.pinterest.com/oauth/` with `client_id`, `redirect_uri`, `response_type=code`, `scope` (space or comma separated), optional `state`.
+- Token: `POST https://api.pinterest.com/v5/oauth/token` (sandbox: `api-sandbox.pinterest.com`).
+- Header: `Authorization: Basic base64(client_id:client_secret)`. Body is `application/x-www-form-urlencoded`.
+
+```bash
+curl -X POST https://api.pinterest.com/v5/oauth/token \
+  --header 'Authorization: Basic {base64-encoded_string_made_of client_id:client_secret}' \
+  --header 'Content-Type: application/x-www-form-urlencoded' \
+  --data-urlencode 'grant_type=authorization_code' \
+  --data-urlencode 'code={your_code}' \
+  --data-urlencode 'redirect_uri=http://localhost/' \
+  --data-urlencode 'continuous_refresh=true'
+```
+
+Scopes we need (same page): `boards:read`, `boards:write`, `pins:read`, `pins:write`, `user_accounts:read`.
+- `pins:write` and `boards:write` have `_secret` variants for secret Pins and boards (`pins:write_secret`, `boards:write_secret`). Needed only if we post to secret boards.
+- Create Pin needs `boards:read`, `boards:write`, `pins:read`, `pins:write` (https://github.com/pinterest/api-description). Register media needs `pins:read`, `pins:write`.
+
+Token lifetimes:
+- Access token: 30 days (`expires_in` 2592000) (set-up-authentication page above).
+- IMPORTANT, differs from our plan: refresh token is now the "continuous refresh token", 60 days, refreshable without end. The old 365-day hard-limit token is no longer supported (https://developers.pinterest.com/docs/api/v5/oauth-token/ and the OpenAPI file).
+- Apps created before 2025-09-25 must send `continuous_refresh=true`. Apps on or after that date get it automatically.
+- Each refresh returns a new refresh token with a new 60-day window (`refresh_token_expires_in` 5184000 in the example). Store the new one every time. Refresh before day 60.
+- Refresh: `grant_type=refresh_token`, `refresh_token`, optional `scope` (subset).
+- Expired or bad token gives HTTP 401, error code 2.
+- Revocation: no revoke endpoint documented (set-up-authentication page). UNVERIFIED. Sessions can end if the user changes password (FAQ above).
+- PKCE: not mentioned in the docs. UNVERIFIED, assume not supported.
+- Client credentials grant exists but cannot publish for users. Skip it.
+
+## 4. Publishing endpoints
+
+All below from https://github.com/pinterest/api-description unless noted.
+
+Create Pin: `POST /v5/pins`. JSON body. Limits: `title` 100, `description` 800, `alt_text` 500, `link` 2048 characters.
+- `board_id` is needed unless the Pin is ad-only (create-boards-and-pins page). We must pick or create a board.
+- Image URL: `"media_source": {"source_type": "image_url", "url": "https://..."}`
+- Base64: `{"source_type": "image_base64", "content_type": "image/jpeg", "data": "..."}` (`image/jpeg` or `image/png`).
+- Carousel: `{"source_type": "multiple_image_urls", "items": [{"url": "..."}, ...]}`. 2 to 5 items. Each item can have `title`, `description`, `link`.
+- Video: `{"source_type": "video_id", "media_id": "...", "cover_image_url": "..."}`. Cover can also be `cover_image_data` (base64) or `cover_image_key_frame_time` (seconds).
+- Success: 201 with the Pin object, including `id`.
+
+Boards: `GET /v5/boards` lists boards (also group boards where user collaborates). `POST /v5/boards` creates one. Scopes `boards:read` and `boards:write`. `page_size` max 250 (sandbox page).
+
+Video upload flow (https://developers.pinterest.com/docs/work-with-organic-content-and-users/create-boards-and-pins/, snippet and fetch):
+1. `POST /v5/media` with `{"media_type": "video"}`. Returns `media_id`, `upload_url`, `upload_parameters`.
+2. `POST` the file to `upload_url` as `multipart/form-data`. Send every `upload_parameters` pair plus the file in the `file` field. No Bearer token. Success is `204 No Content`.
+3. Poll `GET /v5/media/{media_id}`. Status values: `registered`, `processing`, `succeeded`, `failed`.
+4. `POST /v5/pins` with `source_type: "video_id"`. A valid cover image URL is required, or you get 400.
+- Processing "normally takes only a few seconds". While processing, `creative_type` may show `REGULAR`, then `VIDEO` (same page).
+- That upload form is S3-style (per our brief). The docs only say "send all upload_parameters". UNVERIFIED that it is S3.
+
+Media limits (help center, not API docs: https://help.pinterest.com/en/article/review-pin-specs):
+- Image: BMP, JPEG, PNG, TIFF, WEBP. 20 MB max on web. Aspect ratio not stated.
+- The API base64 path accepts only JPEG and PNG (OpenAPI file). Size limit for API image_url: UNVERIFIED.
+- Video: MP4, M4V on web; MP4, MOV, M4V on mobile. API upload docs list .mp4, .mov, .m4v. H.264 or H.265. 4 seconds to 5 minutes. File size limit for organic video: not stated. UNVERIFIED.
+- Video aspect ratio: 9:16 recommended. Others OK: 1:2, 2:3, 3:4, 4:5, 1:1.
+- Ad video specs (2 GB, 15 min) do NOT apply to organic Pins (https://help.pinterest.com/en/business/article/pinterest-product-specs).
+
+Idempotency: no idempotency key found in the Create Pin docs. UNVERIFIED. Postit must dedupe on its side. Never blind-retry a create after a timeout.
+
+Pin URL: response has the Pin `id`. No URL field was documented (create-boards-and-pins page). Build `https://www.pinterest.com/pin/{id}/`. This format is UNVERIFIED in the docs.
+
+Account limits: 2,000 boards, 200,000 Pins for personal accounts (create-boards-and-pins page).
+
+## 5. Rate limits & quotas
+
+From https://developers.pinterest.com/docs/reference/ratelimits/ (fetched; the URL with a hyphen, `/docs/reference/rate-limits/`, worked):
+
+| Access | All calls | `org_write` (create Pin, media, board) | `org_read` |
+|---|---|---|---|
+| Trial | 1,000 per day per app | 300 per day per app | 1,000 per day per app |
+| Standard | 100 per second per user per app | 100 per minute per user per app | 1,000 per minute per user per app |
+
+- Create Pin, Register media and Create board are all `org_write`. Get media and List boards are `org_read`.
+- A video Pin costs 2 `org_write` calls (register + create). Add 1 if we create the board.
+- Headers: `x-ratelimit-limit`, `x-ratelimit-remaining`, `x-ratelimit-reset` (example `100, 100;w=1, 1000;w=60`).
+- 429 means too many requests (OpenAPI file). The page gives no retry advice. Use the reset header and back off. UNVERIFIED for exact reset rules.
+- Limits can change without notice. Ask Pinterest API support for increases.
+- A separate "Pins per user per day" cap: none documented. UNVERIFIED.
+- Do not test rate limits on purpose. Guidelines forbid it (https://policy.pinterest.com/en/developer-guidelines).
+
+## 6. Webhooks/events
+
+- No webhooks found for publishing or any event in the docs we read (https://developers.pinterest.com/docs/faqs/faqs/ does not mention them). UNVERIFIED, assume none.
+- Video: poll `GET /v5/media/{id}`.
+- Token revocation: no event. We find out by a 401 on use or on refresh. Mark the connection as "needs reconnect".
+
+## 7. App review / verification
+
+Current status for us: NOT STARTED.
+
+Trial access:
+- Apply in My apps with app info, use case and privacy policy link (set-up-app page, snippet).
+- Denied for: broken privacy policy, vague app description (https://developers.pinterest.com/docs/key-concepts/access-tiers/).
+- Trial Pins and boards are private to the creator. So Trial is for testing only, not for real customers.
+- Review time: not published. Community reports say a few days (community.pinterest.biz threads). Not official.
+
+Standard access (access-tiers page):
+- App must already have Trial and follow the Developer Guidelines.
+- Upload a demo video of the OAuth flow. It must show live Pinterest integration, not mockups. No sensitive data stored. Terminal or Postman recordings are accepted for solo developers.
+- Steps: My apps > Upgrade on the app card > check details (use case, privacy link) > upload video > submit. Pinterest emails the decision.
+- Denied for: video lacks the auth flow, app uses non-OAuth login methods (passwords, cookies), or no live integration.
+- Timeline: not published. Community threads (Aug to Sep 2026) report 2 to 4+ weeks. Plan for 2 to 4 weeks. Appeal through the Help Center.
+- Guidelines to meet: user consent for each action, no storing API data, no spam features (https://policy.pinterest.com/en/developer-guidelines). Storing tokens is fine. Storing Pinterest data beyond what the user needs is risky. Check with legal.
+- Risk: the rule "do not store any information accessed through Pinterest Materials" may clash with our post history and analytics cache. Review before design.
+
+## 8. Costs
+
+- No API fee found. UNVERIFIED in an official price page. The terms page text we fetched had no pricing. Treat as free.
+
+## 9. Gotchas
+
+- Trial = private sandbox Pins and 300 writes per day per app. We cannot serve customers before Standard access. This is the biggest blocker.
+- Standard access review has no SLA and may take weeks. Start early.
+- Our brief said refresh token 365 days. Docs now say 60 days, refreshable. Refresh at least every 30 days and save the new token each time.
+- A board is required. Call List boards, let the user pick, or create one.
+- Image URLs must be public and fetchable. UNVERIFIED in docs, but standard for URL-pull APIs. Use base64 or signed public URLs.
+- Video cover image is mandatory. Without it: 400.
+- Video not testable in sandbox.
+- Sandbox List boards can return empty pages with a bookmark. Keep paging.
+- Description links are not clickable. UNVERIFIED in docs. Use the `link` field for the click-through URL.
+- Apps registered on or after 2026-09-14 may get 403 `PINNER_DATA_ACCESS_DENIED` on read calls for non-business users. Do not retry in a loop (https://developers.pinterest.com/docs/changelog/changelog/, search snippet).
+- Apps on or after 2025-09-25 get continuous refresh tokens automatically.
+- API v5 only. v4 ads API is deprecated (same changelog, snippet). v3 retirement: UNVERIFIED.
+- TLS 1.2 or higher required (changelog snippet).
+- The API spec version we read is 5.28.0 on GitHub. The docs site says 5.31.0.
+
+## 10. Sources
+
+All: Read on 2026-10-27. "snippet" means we saw it only in a search result summary, because the page fetch failed.
+- https://developers.pinterest.com/docs/key-concepts/access-tiers/ (fetched)
+- https://developers.pinterest.com/docs/reference/rate-limits/ (fetched)
+- https://developers.pinterest.com/docs/getting-started/set-up-authentication-and-authorization/ (fetched)
+- https://developers.pinterest.com/docs/api/v5/oauth-token/ (snippet) and the OpenAPI file below
+- https://developers.pinterest.com/docs/work-with-organic-content-and-users/create-boards-and-pins/ (fetched)
+- https://developers.pinterest.com/docs/developer-tools/sandbox/ (fetched)
+- https://developers.pinterest.com/docs/faqs/faqs/ (fetched)
+- https://developers.pinterest.com/docs/getting-started/set-up-app/ (snippet)
+- https://developers.pinterest.com/docs/changelog/changelog/ (snippet)
+- https://developers.pinterest.com/terms/ (snippet)
+- https://policy.pinterest.com/en/developer-guidelines (fetched)
+- https://github.com/pinterest/api-description (Pinterest official OpenAPI v5.28.0, `v5/openapi.json`, fetched)
+- https://help.pinterest.com/en/article/review-pin-specs (fetched)
+- https://help.pinterest.com/en/business/article/pinterest-product-specs (snippet)
+- Review-time reports only: https://community.pinterest.biz/t/upgrade-to-standard-access-pending-26-days-what-is-the-current-review-time/50445 (Pinterest community forum, not official docs)

@@ -1,0 +1,13 @@
+{
+  "jobStatus": {
+    "jobId": "job-1",
+    "did": "did:plc:abc123",
+    "state": "JOB_STATE_COMPLETED",
+    "blob": {
+      "$type": "blob",
+      "ref": { "$link": "bafkreivideo" },
+      "mimeType": "video/mp4",
+      "size": 5000000
+    }
+  }
+}

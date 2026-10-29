@@ -1,0 +1,12 @@
+{
+  "items": [
+    {
+      "id": "UC_fake_channel",
+      "snippet": {
+        "title": "Alice Channel",
+        "customUrl": "@alice",
+        "thumbnails": { "default": { "url": "https://yt3.example/a.jpg" } }
+      }
+    }
+  ]
+}

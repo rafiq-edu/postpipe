@@ -1,0 +1,10 @@
+{
+  "data": {
+    "user": {
+      "open_id": "open-1",
+      "display_name": "Fake Creator",
+      "avatar_url": "https://p16.example.test/a.jpg"
+    }
+  },
+  "error": { "code": "ok", "message": "", "log_id": "log-2" }
+}

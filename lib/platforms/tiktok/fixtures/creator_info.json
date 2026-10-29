@@ -1,0 +1,12 @@
+{
+  "data": {
+    "creator_username": "fake",
+    "creator_nickname": "Fake",
+    "privacy_level_options": ["PUBLIC_TO_EVERYONE", "SELF_ONLY"],
+    "comment_disabled": false,
+    "duet_disabled": true,
+    "stitch_disabled": false,
+    "max_video_post_duration_sec": 300
+  },
+  "error": { "code": "ok", "message": "", "log_id": "log-1" }
+}

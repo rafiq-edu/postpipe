@@ -1,0 +1,50 @@
+---
+title: Quickstart
+description: Publish a first post in test mode with the mock platform.
+---
+
+You need a test API key. Create one in the dashboard and pick mode "test". Set it as `PP_KEY`.
+
+## 1. Create a connect URL
+
+```bash
+curl -X POST https://postpipe.com/v1/social-accounts/auth-url \
+  -H "Authorization: Bearer $PP_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "platform": "mock",
+    "external_id": "user-123",
+    "redirect_url": "https://example.com/done",
+    "platform_data": { "target_id": "page-1" }
+  }'
+```
+
+The response has a `url` and `expires_at`. Open the `url` in a browser and continue. With a test key the account is a mock account. Setting `platform_data.target_id` to `page-1` or `page-2` skips the page picker.
+
+You are sent to your `redirect_url` with `status=success&account_id=<id>`. If the end user chooses Cancel, you get `status=error&reason=cancelled` instead. The session stays open.
+
+## 2. Create a post
+
+```bash
+curl -X POST https://postpipe.com/v1/social-posts \
+  -H "Authorization: Bearer $PP_KEY" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: first-post-1" \
+  -d '{
+    "caption": "Hello from PostPipe",
+    "social_accounts": ["<account_id>"]
+  }'
+```
+
+Without `scheduled_at` the post is queued to publish now. Set `scheduled_at` to a time up to 90 days ahead to schedule it.
+
+## 3. Check the result
+
+```bash
+curl "https://postpipe.com/v1/social-post-results?post_id=<post_id>" \
+  -H "Authorization: Bearer $PP_KEY"
+```
+
+Each target has a `status`: `pending`, `running`, `success`, `error` or `cancelled`.
+
+The mock platform fails on purpose when a caption starts with a prefix such as `FAIL_PERMANENT`. See the [mock platform](/docs/platforms/mock) page.

@@ -1,0 +1,6 @@
+{
+  "did": "did:plc:abc123",
+  "handle": "alice.example.com",
+  "accessJwt": "eyJhbGciOiJIUzI1NiJ9.eyJleHAiOjQxMDI0NDQ4MDB9.fake-signature",
+  "refreshJwt": "eyJhbGciOiJIUzI1NiJ9.eyJleHAiOjQxMDI0NDQ4MDB9.fake-signature"
+}

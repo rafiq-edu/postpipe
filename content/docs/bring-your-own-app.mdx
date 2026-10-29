@@ -1,0 +1,44 @@
+---
+title: Bring your own app
+description: Post through your own platform developer app.
+---
+
+You can plug your own developer app (client ID and secret) into PostPipe for each platform. Posts for that platform then go through your app.
+
+## Why
+
+There are two levels.
+
+- An app of yours that the platform has approved lets your accounts and your users post publicly today, even on platforms PostPipe is not approved for yet.
+- An app that is not approved yet posts only within the platform's test limits, mostly to your own accounts. See the table below.
+
+Platforms PostPipe has not been approved for yet become available to your organisation once you add your app. Bluesky needs no app of your own.
+
+## Steps
+
+1. Create a developer app on the platform. Each platform page has an App setup section: [X](/docs/platforms/x), [LinkedIn](/docs/platforms/linkedin), [Facebook](/docs/platforms/facebook), [Instagram](/docs/platforms/instagram), [Threads](/docs/platforms/threads), [TikTok](/docs/platforms/tiktok), [YouTube](/docs/platforms/youtube), [Pinterest](/docs/platforms/pinterest).
+2. In the dashboard open Settings, then Your own platform apps.
+3. Paste the client ID and client secret on the platform's card, then press Save. For Facebook the Login config ID is required too.
+4. Register the callback URL shown on the card in your app's settings on the platform.
+
+Only the owner of the organisation can change these settings. The secret is stored encrypted and is never shown again.
+
+## What an unapproved app can do
+
+| Platform | Limit |
+|---|---|
+| X | Needs a funded X developer account (pay-per-use). |
+| LinkedIn | Personal posts work self-serve. Company pages need LinkedIn Community Management approval. |
+| Facebook | Without Meta App Review your app can post only for accounts that have a role on it. |
+| Instagram | Without Meta App Review your app can post only for accounts that have a role on it. |
+| Threads | Without Meta App Review your app can post only for accounts that have a role on it. |
+| TikTok | Unaudited TikTok apps post only for their own test accounts, as drafts to the inbox. |
+| YouTube | Google testing mode: up to 100 test users, private uploads, tokens expire after 7 days. |
+| Pinterest | Pinterest trial access creates private pins only. |
+
+## Things to know
+
+- Accounts keep the app they were connected with. If you change or remove your app, accounts connected through it stop working. Reconnect them afterwards.
+- Removing your app does not move existing accounts to PostPipe's app.
+- Pinterest: `PINTEREST_ENV` (sandbox or production) is set once for the whole deployment and applies to every organisation's Pinterest app.
+- Posts through your own X app are not billed X usage by PostPipe; X bills your developer account directly.

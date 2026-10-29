@@ -1,0 +1,8 @@
+{
+  "blob": {
+    "$type": "blob",
+    "ref": { "$link": "bafkreifake" },
+    "mimeType": "image/jpeg",
+    "size": 123456
+  }
+}

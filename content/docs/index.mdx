@@ -1,0 +1,84 @@
+---
+title: PostPipe
+description: One API to publish to many social platforms.
+---
+
+PostPipe is an API for publishing posts to social platforms. You connect accounts, then create posts through one API. The base URL is `https://postpipe.com/v1`.
+
+## Authentication
+
+Send an API key in the `Authorization` header.
+
+```
+Authorization: Bearer pp_live_...
+```
+
+Keys start with `pp_live_` or `pp_test_`. Create them in the dashboard. We store only a hash of each key. Revoked keys return `401` with `invalid_api_key`. A missing key returns `401` with `missing_api_key`.
+
+## Live and test mode
+
+A `pp_test_` key never calls a real platform. Connecting an account creates a fake account on the mock platform. Posts publish to the mock adapter. Webhooks still fire. Nothing in test mode is billed.
+
+A `pp_live_` key talks to real platforms and counts toward your plan. The API only returns data of the key's own mode. In live mode the `mock` platform returns a `422`.
+
+## Idempotency
+
+Send an `Idempotency-Key` header (at most 255 characters) on any request that creates or changes data. If you repeat the same request with the same key within 24 hours, you get the first response again, with the header `Idempotent-Replayed: true`. If you reuse a key with a different request, you get `422` with `idempotency_key_reused`. If a request with the same key is still running, you get `409` with `idempotency_key_in_use`; retry later.
+
+## Rate limits
+
+Limits are per API key, per minute. They depend on your plan.
+
+| Plan | Requests per minute |
+|---|---|
+| Free | 30 |
+| Builder | 120 |
+| Scale | 600 |
+
+Every response has `RateLimit-Limit`, `RateLimit-Remaining` and `RateLimit-Reset` (seconds). Over the limit, you get `429` with `rate_limited` and a `Retry-After` header.
+
+## Errors
+
+Errors follow RFC 9457 problem details, with content type `application/problem+json`.
+
+```json
+{
+  "type": "https://postpipe.com/errors/validation_failed",
+  "title": "Validation failed",
+  "status": 422,
+  "detail": "Request body is invalid",
+  "code": "validation_failed"
+}
+```
+
+Use `code` in your code. It is one of: `missing_api_key`, `invalid_api_key`, `rate_limited`, `idempotency_key_reused`, `idempotency_key_in_use`, `validation_failed`, `not_found`, `unknown_social_account`, `account_reauth_required`, `post_locked`, `plan_limit_reached`, `account_limit_reached`, `invalid_state`, `session_expired`, `media_unreachable`, `daily_quota_reached`, `duplicate_post`, `board_required`, `image_not_jpeg`, `caption_too_long`, `video_too_long`, `too_many_media`.
+
+## Webhooks
+
+Create an endpoint with `POST /v1/webhooks`. The response includes the signing `secret` once. Events:
+
+- `social.post.created`
+- `social.post.result.created`
+- `social.account.created`
+- `social.account.disconnected`
+- `social.account.token_expiring`
+
+Each delivery is a `POST` with these headers: `PostPipe-Signature`, `PostPipe-Delivery-Id` and `PostPipe-Event`. A `2xx` answer counts as success. Any other answer, or a timeout after 10 seconds, is retried after 1 minute, 5 minutes, 30 minutes, 2 hours and 6 hours. After 6 attempts the delivery is marked dead. Redirects are not followed.
+
+### Check the signature
+
+The header looks like `t=<unix seconds>,v1=<hex>`. The value is an HMAC-SHA256 of `<t>.<raw request body>`, keyed with your endpoint secret. Reject deliveries older than 5 minutes.
+
+```ts
+import { createHmac, timingSafeEqual } from "node:crypto";
+
+export function verify(body: string, header: string, secret: string) {
+  const parts = Object.fromEntries(header.split(",").map((p) => p.split("=")));
+  if (Math.abs(Date.now() / 1000 - Number(parts.t)) > 300) return false;
+  const expected = createHmac("sha256", secret)
+    .update(`${parts.t}.${body}`)
+    .digest();
+  const got = Buffer.from(parts.v1 ?? "", "hex");
+  return got.length === expected.length && timingSafeEqual(got, expected);
+}
+```

@@ -1,0 +1,126 @@
+@import "tailwindcss";
+@import "fumadocs-ui/css/neutral.css";
+@import "fumadocs-ui/css/preset.css";
+@import "fumadocs-openapi/css/preset.css";
+@source "../node_modules/fumadocs-ui/dist/**/*.js";
+@source "../node_modules/fumadocs-openapi/dist/**/*.js";
+
+/* Light by default, as in the mockup. Dark only via the docs theme toggle (.dark on <html>). */
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  color-scheme: light;
+  --canvas: oklch(0.965 0.006 250);
+  --panel: oklch(1 0 0);
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.2 0.005 260);
+  --muted: oklch(0.96 0.004 250);
+  --muted-foreground: oklch(0.5 0.01 260);
+  --border: oklch(0.91 0.006 255);
+  --input: oklch(0.88 0.006 255);
+  --brand: oklch(0.66 0.2 42);
+  --brand-soft: oklch(0.95 0.04 50);
+  --brand-foreground: oklch(0.55 0.18 40);
+  --danger-soft: oklch(0.95 0.03 25);
+  --ring: oklch(0.66 0.2 42);
+  --primary: oklch(0.22 0 0);
+  --primary-foreground: oklch(0.98 0 0);
+  --secondary: oklch(0.95 0 0);
+  --secondary-foreground: oklch(0.2 0 0);
+  --accent: oklch(0.95 0 0);
+  --accent-foreground: oklch(0.2 0 0);
+  --destructive: oklch(0.5 0.2 27);
+  --ok: oklch(0.45 0.12 150);
+  --warn: oklch(0.5 0.12 75);
+}
+
+.dark {
+  color-scheme: dark;
+  & {
+    --canvas: oklch(0.14 0.005 260);
+    --panel: oklch(0.18 0.005 260);
+    --background: oklch(0.18 0.005 260);
+    --foreground: oklch(0.94 0 0);
+    --brand: oklch(0.72 0.18 45);
+    --brand-soft: oklch(0.3 0.06 45);
+    --brand-foreground: oklch(0.8 0.14 50);
+    --danger-soft: oklch(0.28 0.06 25);
+    --muted: oklch(0.22 0 0);
+    --muted-foreground: oklch(0.7 0 0);
+    --border: oklch(0.28 0 0);
+    --input: oklch(0.33 0 0);
+    --ring: oklch(0.72 0.18 45);
+    --primary: oklch(0.92 0 0);
+    --primary-foreground: oklch(0.2 0 0);
+    --secondary: oklch(0.25 0 0);
+    --secondary-foreground: oklch(0.94 0 0);
+    --accent: oklch(0.25 0 0);
+    --accent-foreground: oklch(0.94 0 0);
+    --destructive: oklch(0.7 0.17 25);
+    --ok: oklch(0.75 0.13 150);
+    --warn: oklch(0.8 0.12 80);
+  }
+}
+
+@theme inline {
+  --color-canvas: var(--canvas);
+  --color-panel: var(--panel);
+  --color-brand: var(--brand);
+  --color-brand-soft: var(--brand-soft);
+  --color-brand-foreground: var(--brand-foreground);
+  --color-danger-soft: var(--danger-soft);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-ok: var(--ok);
+  --color-warn: var(--warn);
+  --radius-md: 8px;
+  --font-sans:
+    var(--font-plex-sans), ui-sans-serif, system-ui, -apple-system, "Segoe UI",
+    sans-serif;
+  --font-mono: var(--font-plex-mono), ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+  body {
+    background: var(--canvas);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    -webkit-font-smoothing: antialiased;
+  }
+}
+
+/* fumadocs: map its colors and fonts to our tokens (light and dark follow :root). */
+:root {
+  --color-fd-background: var(--background);
+  --color-fd-foreground: var(--foreground);
+  --color-fd-muted: var(--muted);
+  --color-fd-muted-foreground: var(--muted-foreground);
+  --color-fd-popover: var(--panel);
+  --color-fd-popover-foreground: var(--foreground);
+  --color-fd-card: var(--panel);
+  --color-fd-card-foreground: var(--foreground);
+  --color-fd-border: var(--border);
+  --color-fd-primary: var(--primary);
+  --color-fd-primary-foreground: var(--primary-foreground);
+  --color-fd-secondary: var(--secondary);
+  --color-fd-secondary-foreground: var(--secondary-foreground);
+  --color-fd-accent: var(--accent);
+  --color-fd-accent-foreground: var(--accent-foreground);
+  --color-fd-ring: var(--ring);
+}

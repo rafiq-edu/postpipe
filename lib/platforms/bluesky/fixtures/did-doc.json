@@ -1,0 +1,11 @@
+{
+  "id": "did:plc:abc123",
+  "alsoKnownAs": ["at://alice.example.com"],
+  "service": [
+    {
+      "id": "#atproto_pds",
+      "type": "AtprotoPersonalDataServer",
+      "serviceEndpoint": "https://pds.example.com"
+    }
+  ]
+}

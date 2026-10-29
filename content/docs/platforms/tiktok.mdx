@@ -1,0 +1,212 @@
+---
+title: "TikTok integration (Content Posting API + Login Kit)"
+---
+
+| Approval needed | Status | Works before approval | Blocked before approval | Timeline |
+|---|---|---|---|---|
+| App review (portal) for `video.publish`, then Content Posting API audit [tiktok.md] | NOT STARTED | Sandbox use with accounts you own. Login Kit works in sandbox [tiktok.md] | Public posting. Unaudited posts are forced private. Max 5 users per 24 h [tiktok.md] | Not stated in docs. UNVERIFIED [tiktok.md] |
+
+Read on 2026-10-27. Base doc URL: `https://developers.tiktok.com/docs/en/<page>` (the older `/doc/<page>` form returned HTTP 403 to our fetch tool; the content is the same pages). API host: `https://open.tiktokapis.com`.
+Anything marked UNVERIFIED was not found in official docs.
+
+## 1. Overview
+
+What we can do (source: content-posting-api-get-started, reference-direct-post, photo-post, upload-video):
+- Direct Post video: publish straight to the creator profile. Scope `video.publish`.
+- Direct Post photo (carousel): `POST /v2/post/publish/content/init/` with `post_mode=DIRECT_POST`.
+- Upload to inbox (draft): video via `/v2/post/publish/inbox/video/init/`, photo via `post_mode=MEDIA_UPLOAD`. The creator finishes the post in the TikTok app. Scope `video.upload`.
+- Privacy levels: `PUBLIC_TO_EVERYONE`, `MUTUAL_FOLLOW_FRIENDS`, `FOLLOWER_OF_CREATOR`, `SELF_ONLY`. Must be one of the options from the creator info query (reference-direct-post).
+- Video switches: `disable_duet`, `disable_stitch`, `disable_comment`. Photo: `disable_comment` only.
+- Brand toggles: `brand_content_toggle` (paid partnership, third party) and `brand_organic_toggle` (own business). Also `is_aigc` (AI label), `video_cover_timestamp_ms`, `auto_add_music` (photo).
+- Photo posts are labelled "new" in the docs (content-posting-api-get-started).
+
+Account types: the docs do not name supported account types. The only rule is that the user authorizes the app for the scope. Creator info returns different privacy options for public and private accounts (reference-query-creator-info). Business-account rules: UNVERIFIED.
+
+NOT possible / not documented:
+- Native scheduling: not in any Content Posting page. Treat as NOT supported (UNVERIFIED as a statement; no field exists). We must schedule on our side.
+- Text-only posts: `media_type` accepts only `PHOTO`; video needs a file or URL (photo-post). No text-only endpoint found.
+- Adding links or watermarks to content is banned by the UX rules (content-sharing-guidelines).
+- Posting public content before audit (see section 7).
+
+## 2. App setup
+
+- Portal: https://developers.tiktok.com (Manage apps). Create the app, then add products (get-started, add-a-sandbox).
+- Products: Login Kit (gives `user.info.basic` by default, scopes-overview) and Content Posting API. Enable the **Direct Post** configuration to post directly (get-started).
+- Redirect URI rules (login-kit-web): max 10 per app, under 512 chars, absolute, `https`, static, no query string, no `#`.
+- Review URLs (app-review-guidelines): official website (not just a landing or login page), Privacy Policy and Terms of Service links visible on it without a menu, and a valid redirect URI for web apps.
+- Domain verification for `PULL_FROM_URL` (media-transfer-guide): add a signature string to the domain DNS. A verified domain covers subdomains below it. A URL prefix is also allowed. Needed for both video and photo pulls.
+- Sandbox (add-a-sandbox): up to 5 sandboxes per app, up to 10 target users each, accounts must be ones you own (login credentials needed). No app review needed. "Sandbox mode does not offer access to Content Posting API for public videos." Login Kit works there.
+
+## 3. OAuth
+
+Source: login-kit-web, oauth-user-access-token-management, tiktok-api-scopes.
+
+- Flow: authorization code. Not OAuth 1.
+- Authorize: `https://www.tiktok.com/v2/auth/authorize/` with `client_key`, `response_type=code`, `scope` (comma separated), `redirect_uri`, `state`. Optional `disable_auto_auth` (0 or 1).
+- Callback returns `code`, `scopes`, `state`. Users can deny some scopes, so read `scopes` (login-kit-web).
+- Token: `POST https://open.tiktokapis.com/v2/oauth/token/`, `application/x-www-form-urlencoded`, `grant_type=authorization_code`, with `client_key`, `client_secret`, `code` (URL-decoded), `redirect_uri`.
+- Response: `open_id`, `scope`, `access_token`, `expires_in`, `refresh_token`, `refresh_expires_in`, `token_type`.
+- PKCE: `code_verifier` is required only for mobile and desktop apps. Our web flow does not need it.
+- Access token life: 86400 s (24 h). Refresh token life: 31536000 s (365 days).
+- Refresh: same endpoint, `grant_type=refresh_token`. No user consent needed. The response may return a different refresh token. If it differs, store the new one (rotation).
+- Does a refresh reset the 365-day window? Not stated. UNVERIFIED.
+- Revoke: `POST https://open.tiktokapis.com/v2/oauth/revoke/` with `client_key`, `client_secret`, `token`.
+
+Scopes we need (tiktok-api-scopes):
+
+| Scope | Use |
+|---|---|
+| `user.info.basic` | open_id, avatar, display name. Default with Login Kit. |
+| `user.info.profile` | profile link, bio, is_verified |
+| `user.info.stats` | follower, like, video counts (optional) |
+| `video.publish` | Direct Post and Get Post Status |
+| `video.upload` | Inbox upload and Get Post Status |
+| `video.list` | read public videos (optional) |
+
+Profile call: `GET https://open.tiktokapis.com/v2/user/info/` (display-api-get-started).
+The scopes page states no approval rule per scope. The get-started page says the app "must be approved for the `video.publish` scope".
+
+## 4. Publishing endpoints
+
+All calls: `Authorization: Bearer {access_token}`, `Content-Type: application/json; charset=UTF-8`.
+
+Sequence (get-started, reference-direct-post):
+1. `POST /v2/post/publish/creator_info/query/` (needs `video.publish`). Gives `privacy_level_options`, `comment_disabled`, `duet_disabled`, `stitch_disabled`, `max_video_post_duration_sec`, nickname, avatar (avatar URL valid 2 h).
+2. Init:
+   - Video direct: `POST /v2/post/publish/video/init/`
+   - Video inbox: `POST /v2/post/publish/inbox/video/init/`
+   - Photo (both modes): `POST /v2/post/publish/content/init/`
+3. Send media: `FILE_UPLOAD` returns `upload_url` (valid 1 hour). Use `PUT`. Or `PULL_FROM_URL`.
+4. Poll `POST /v2/post/publish/status/fetch/` with `{"publish_id": "..."}` or use webhooks.
+
+Init body for video (reference-direct-post):
+- `post_info`: `title` (max 2200 UTF-16 runes), `privacy_level`, `disable_duet`, `disable_stitch`, `disable_comment`, `video_cover_timestamp_ms`, `brand_content_toggle`, `brand_organic_toggle`, `is_aigc`.
+- `source_info`: `source`, `video_url`, `video_size`, `chunk_size`, `total_chunk_count`.
+- Response: `data.publish_id` (max 64 chars), `data.upload_url` (max 256 chars), `error.code` (`ok` = success).
+
+Chunk rules (media-transfer-guide):
+- Each chunk 5 MB to 64 MB. The final chunk may be larger, up to 128 MB.
+- Under 5 MB: upload whole (`chunk_size` = file size). Over 64 MB: must chunk.
+- `total_chunk_count` = `video_size` / `chunk_size`, rounded down. Allowed 1 to 1000. Upload chunks in order.
+- Each PUT needs `Content-Type` (`video/mp4`, `video/quicktime`, `video/webm`), `Content-Length`, `Content-Range: bytes FIRST-LAST/TOTAL`.
+
+Pull from URL: HTTPS, no redirects, must stay reachable. Download times out after 1 hour (media-transfer-guide).
+
+Video limits (media-transfer-guide): MP4 (best), WebM, MOV. Codecs H.264 (best), H.265, VP8, VP9. 23 to 60 FPS. Height and width 360 to 4096 px. Up to 10 minutes via the upload endpoint, size up to 4 GB. The real duration cap per user is `max_video_post_duration_sec`.
+
+Photo limits (photo-post, media-transfer-guide):
+- Up to 35 images, `source` must be `PULL_FROM_URL` (verified domain). `photo_cover_index` is required (zero-based).
+- WebP or JPEG, up to 1080p, up to 20 MB each.
+- `title` max 90 runes, `description` max 4000 runes. Direct Post needs `privacy_level`.
+
+Caption, hashtags, mentions: video caption is `title`, max 2200 runes. Hashtag and mention syntax rules: UNVERIFIED (not in the pages read). The UX rules say preset text and hashtags must be editable by the user and we must not add promotional text or links (content-sharing-guidelines).
+
+Idempotency: no idempotency key is documented. UNVERIFIED. Store our own post ID against `publish_id` and never auto-retry an init that returned `ok`.
+
+Success and post URL (get-video-status):
+- Status values: `PROCESSING_UPLOAD`, `PROCESSING_DOWNLOAD`, `SEND_TO_USER_INBOX`, `PUBLISH_COMPLETE`, `FAILED` (with `fail_reason`).
+- `PUBLISH_COMPLETE` does not give the post ID. The ID (`publicaly_available_post_id`, docs spelling) comes only after the post is public and moderated. Moderation takes about a minute, sometimes hours.
+- No ready-made post URL field was found. UNVERIFIED. We build the URL from username and post ID, and must test that.
+- Status poll limit: 30 per minute per token.
+
+## 5. Rate limits & quotas
+
+| Limit | Value | Source |
+|---|---|---|
+| Creator info query | 20 requests / min / user token | reference-query-creator-info |
+| Video init (direct and inbox) | 6 requests / min / user token | reference-direct-post, upload-video |
+| Photo init | 6 requests / min / user token | photo-post |
+| Status fetch | 30 requests / min / user token | get-video-status |
+| Posts per creator | about 15 / day, shared across all Direct Post apps | content-sharing-guidelines |
+| Pending inbox shares | max 5 per 24 h per user | upload-video |
+| Active creators per app | cap per 24 h, set from audit estimates | content-sharing-guidelines |
+| Unaudited app | 5 users per 24 h, private only | content-sharing-guidelines |
+
+- Over the limit: HTTP 429 `rate_limit_exceeded`.
+- The 15 per day figure is "roughly" in the docs. The exact cap may vary. Treat it as approximate.
+- Quota increase process: not documented in the pages read. The active-user cap is tied to audit estimates, so ask for it in the audit form. UNVERIFIED beyond that.
+- A general API rate limit page (`api-rate-limits`) returned 404.
+
+## 6. Webhooks/events
+
+Source: webhooks-overview, get-video-status, webhooks-events, webhooks-verification, migration-notice-share-video-api.
+
+- Setup: set a callback URL in the Developer Portal. It must be HTTPS. TikTok sends JSON via POST. Reply 200 at once.
+- Retry: up to 72 hours with exponential backoff, then dropped. Delivery is at least once, so handle duplicates.
+- Body fields: `client_key`, `event`, `create_time`, `user_openid`, `content` (JSON string).
+- Signature: header `TikTok-Signature` = `t=<timestamp>,s=<signature>`. `s` is HMAC-SHA256 of `<timestamp>.<raw body>` keyed with the `client_secret`. No fixed time window is given, so we choose one (webhooks-verification).
+- Content Posting events (get-video-status):
+  - `post.publish.failed` (`publish_id`, `reason`, `publish_type`)
+  - `post.publish.complete` (`publish_id`, `publish_type`). For uploads: the creator made a post from the draft.
+  - `post.publish.inbox_delivered` (`publish_id`, `publish_type`)
+  - `post.publish.publicly_available` (`publish_id`, `post_id`, `publish_type`)
+  - `post.publish.no_longer_publicaly_available` (docs spelling)
+- Deauthorization: `authorization.removed`, with `content.reason` 0 to 5 (unknown, user disconnected, account deleted, age changed, banned, developer revoked). The token is already revoked when it arrives (webhooks-events).
+- The legacy names `video.upload.failed` and `video.publish.complete` became `post.publish.failed` and `post.publish.complete` (migration notice).
+
+## 7. App review / verification
+
+Current status for us: **NOT STARTED**.
+
+- Two gates:
+  1. App review (portal): needed to use production Login Kit and products with real users, and approval of the `video.publish` scope (get-started, app-review-guidelines).
+  2. Content Posting API **audit**: without it "All content posted by unaudited clients will be restricted to private viewing mode" (get-started). Apply at https://developers.tiktok.com/application/content-posting-api.
+- Unaudited apps: only `SELF_ONLY` in practice. A public attempt returns `unaudited_client_can_only_post_to_private_accounts`. Max 5 users per 24 h and accounts must be private (content-sharing-guidelines, reference-direct-post).
+- App review needs (app-review-guidelines): demo video (up to 5 files, 50 MB each) showing the full end-to-end flow and every scope. A first review must use a sandbox for the demo. The domain in the video must match the website URL. The app must not be for private use or still in testing. The icon must not look like a well-known brand.
+- The audit checks, as written in content-sharing-guidelines (the form itself was not readable):
+  - Privacy dropdown from `privacy_level_options`, no default value.
+  - Commercial content toggle off by default. "Your brand" ("Promotional content") and "Branded content" ("Paid partnership"). Publish disabled if toggle is on and nothing is chosen. Branded content cannot be private.
+  - Music Usage Confirmation shown before publish (Branded Content Policy too when branded).
+  - Comment, Duet, Stitch unchecked by default. Grey out what the creator disabled.
+  - Preview, creator nickname shown, "may take a few minutes" notice, no watermark or promo text, title editable, check video length against `max_video_post_duration_sec`.
+  - Poll status or use webhooks.
+- Typical timeline: not stated in official docs. UNVERIFIED.
+
+## 8. Costs
+
+No API fee is stated in the official pages read. UNVERIFIED as a statement (no pricing page found). Expect free. Real cost is the audit work.
+
+## 9. Gotchas
+
+- Private until audit: every public post fails or is forced private before the audit passes.
+- Error codes (reference-direct-post, photo-post, query-creator-info, get-video-status):
+  - 400 `invalid_param`; 401 `access_token_invalid`, `scope_not_authorized`
+  - 403 `spam_risk_too_many_posts` (daily cap; post from the app instead), `spam_risk_user_banned_from_posting`, `spam_risk_too_many_pending_share`, `reached_active_user_cap`, `unaudited_client_can_only_post_to_private_accounts`, `url_ownership_unverified`, `privacy_level_option_mismatch`
+  - 429 `rate_limit_exceeded`; 5xx retry later
+  - Status errors: `invalid_publish_id`, `token_not_authorized_for_specified_publish_id`
+  - Fail reasons: `file_format_check_failed`, `duration_check_failed`, `frame_rate_check_failed`, `picture_size_check_failed`, `video_pull_failed`, `photo_pull_failed`, `auth_removed`, `spam_risk_text`, `spam_risk`, `internal` (retry), `publish_cancelled`.
+- `spam_risk_too_many_posts` can come back as HTTP 200 on the creator info call.
+- Refresh token rotation: always save the newest refresh token.
+- Access token lasts 24 h. Refresh early (Silent Login page suggests 10 to 30 minutes before expiry; seen in search summary only, not read in full).
+- Pull from URL: needs DNS-verified domain, HTTPS, no redirects. Our storage URLs must be on a domain we verify. Signed S3 or CDN URLs with redirects will fail.
+- Photos only via pull from URL. No direct file upload for photos.
+- `MEDIA_UPLOAD` (photo inbox) needs TikTok app 31.8 or later (`app_version_check_failed`).
+- Post ID arrives late, after moderation. Do not mark "done with URL" at `PUBLISH_COMPLETE`.
+- Docs have typos in names: `publicaly_available_post_id`, `no_longer_publicaly_available`. Match them exactly.
+- Docs say sandbox has no public Content Posting. Third-party posts say sandbox can post privately. Test before relying on it (UNVERIFIED).
+- Legacy Share Video API ended 10 Sep 2023 (migration notice). Do not use `open-api.tiktok.com` or v1 OAuth.
+- Get-started page last updated "August 4, 2026". Photo posting is the newest feature. No other 2025 or 2026 changes were found in the pages read.
+
+## 10. Sources
+
+All: Read on 2026-10-27.
+- https://developers.tiktok.com/docs/en/content-posting-api-get-started
+- https://developers.tiktok.com/docs/en/content-posting-api-reference-direct-post
+- https://developers.tiktok.com/docs/en/content-posting-api-reference-upload-video
+- https://developers.tiktok.com/docs/en/content-posting-api-reference-photo-post
+- https://developers.tiktok.com/docs/en/content-posting-api-media-transfer-guide
+- https://developers.tiktok.com/docs/en/content-posting-api-reference-query-creator-info
+- https://developers.tiktok.com/docs/en/content-posting-api-reference-get-video-status
+- https://developers.tiktok.com/docs/en/content-sharing-guidelines
+- https://developers.tiktok.com/docs/en/login-kit-web
+- https://developers.tiktok.com/docs/en/oauth-user-access-token-management
+- https://developers.tiktok.com/docs/en/scopes-overview
+- https://developers.tiktok.com/docs/en/tiktok-api-scopes
+- https://developers.tiktok.com/docs/en/webhooks-overview
+- https://developers.tiktok.com/docs/en/webhooks-events
+- https://developers.tiktok.com/docs/en/webhooks-verification
+- https://developers.tiktok.com/docs/en/add-a-sandbox
+- https://developers.tiktok.com/docs/en/app-review-guidelines
+- https://developers.tiktok.com/docs/en/display-api-get-started
+- https://developers.tiktok.com/bulletin/migration-notice-share-video-api/
+- https://developers.tiktok.com/products/content-posting-api/ (overview only; no audit details)

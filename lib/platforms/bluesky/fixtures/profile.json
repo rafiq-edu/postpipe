@@ -1,0 +1,6 @@
+{
+  "did": "did:plc:abc123",
+  "handle": "alice.example.com",
+  "displayName": "Alice",
+  "avatar": "https://cdn.bsky.app/img/avatar/plain/did:plc:abc123/fake@jpeg"
+}

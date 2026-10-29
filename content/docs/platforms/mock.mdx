@@ -1,0 +1,33 @@
+---
+title: "Mock platform (test mode only)"
+---
+
+Approval: not tracked yet
+
+The mock adapter stands in for every platform when an API key is in test mode. It never calls the network.
+
+## Limits
+
+- Caption: at most 500 characters (`caption_too_long`).
+- Media: at most 4 items per post (`too_many_media`).
+- Video: at most 120 seconds (`video_too_long`).
+- Daily quota: 100 posts per account per UTC day (`daily_quota_reached`).
+
+## Caption prefixes
+
+- `FAIL_RETRYABLE`: retryable failure on every attempt.
+- `FAIL_PERMANENT`: permanent failure on the first attempt.
+- `FAIL_AUTH`: auth failure; the account becomes `expired`.
+- `RETRY_AFTER_10M`: retryable failure with `retryAfterMs` 600000.
+- `SLOW_30S`: one wait of 30 seconds, then success.
+- `MULTI_STEP`: three publish steps (`start`, `uploaded`, `finalizing`), then success.
+
+## Configuration
+
+- `fail` (boolean): when true the post fails permanently with `mock_config_fail`.
+- `delay_ms` (0 to 60000): one wait of that many milliseconds before success.
+
+## Connect
+
+- `platform_data.user_id` on `POST /v1/social-accounts/auth-url` picks the fake user (default `mock-user-1`). The same `user_id` reconnects the same account.
+- `platform_data.target_id` (`page-1` or `page-2`) skips the target picker.

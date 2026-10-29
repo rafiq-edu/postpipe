@@ -1,0 +1,18 @@
+{
+  "value": {
+    "video": "urn:li:video:VID1",
+    "uploadToken": "utok",
+    "uploadInstructions": [
+      {
+        "firstByte": 0,
+        "lastByte": 4194303,
+        "uploadUrl": "https://www.linkedin.com/dms-uploads/v-1"
+      },
+      {
+        "firstByte": 4194304,
+        "lastByte": 4194313,
+        "uploadUrl": "https://www.linkedin.com/dms-uploads/v-2"
+      }
+    ]
+  }
+}

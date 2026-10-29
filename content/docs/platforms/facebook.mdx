@@ -1,0 +1,272 @@
+---
+title: "Facebook Pages integration"
+---
+
+| Approval needed | Status | Works before approval | Blocked before approval | Timeline |
+|---|---|---|---|---|
+| App Review + Business Verification for Advanced Access [facebook.md] | IN PROGRESS (verification). App Review NOT STARTED | Test users (max 10) and users with a role on the app [facebook.md] | Any public user. Page posting needs approved permissions [facebook.md] | Not stated in docs. UNVERIFIED [facebook.md] |
+
+Researched 2026-10-27. Graph API latest version is v26.0 (see Sources S18). Facts have a source tag like [S1]. UNVERIFIED means no official page confirmed it.
+
+## 1. Overview
+
+What we can publish to a Page:
+
+- Text post: POST /\{page-id\}/feed with `message`. Either `message` or `link` is required. [S3]
+- Link post: same endpoint with `link`. [S3]
+- Single photo: POST /\{page-id\}/photos. Returns `id` and `post_id`. [S4]
+- Multi-photo: upload each photo with `published=false`, then attach them to a feed post. The `attached_media` field is NOT documented on the feed page. [S3] UNVERIFIED (official flow). Community knowledge says `attached_media[0]={"media_fbid":"..."}`; confirm in a test.
+- Video: POST /\{page-id\}/videos. [S6]
+- Reel: POST /\{page-id\}/video_reels. [S7]
+- Story: photo_stories and video_stories edges. [S8]
+- Scheduled post: `published=false` plus `scheduled_publish_time`. [S2]
+- Unpublished post: `published=false` on feed. `published` is not supported when `actions` is set. [S3]
+- Edit or delete: an app can update a Page post only if that app created it. Update is POST /\{page-post-id\}. Delete is DELETE /\{page-post-id\}. [S2]
+
+Not possible or not covered:
+
+- Posting to personal profiles: not covered in Pages API docs. UNVERIFIED as "impossible". The Pages API only targets Pages. [S1]
+- Posting to Groups: not covered in Pages API docs. UNVERIFIED. (`publish_video` mentions groups for live video only. [S10])
+- Reels can only be published or crossposted to Pages. [S7]
+
+Roles and tasks:
+
+- The app user must have the `CREATE_CONTENT` task on the Page to publish. [S3][S4][S7]
+- The posts guide says the user needs `CREATE_CONTENT`, `MANAGE` and `MODERATE`. [S2]
+- Admin access gives all tasks. Others can get single tasks. [S11]
+- New Pages Experience: the docs fetched do not mention it. UNVERIFIED. Our code should read the `tasks` array from /me/accounts and check for `CREATE_CONTENT`. [S1][S12]
+
+## 2. App setup
+
+- App type: Business. Facebook Login for Business needs a Business app, or an app with a supported use case. [S13]
+- Facebook Login for Business is "the preferred authentication and authorization solution for tech providers". [S13]
+- Standard Facebook Login is recommended by Meta for consumer sign-in, not for business integrations. [S13]
+- Apps with type None can switch to Business, but not back. The switch can revoke unsupported permissions. [S13]
+- Configuration ID: create it in App Dashboard under Facebook Login for Business > Configurations. It sets token type, assets and permissions. [S13]
+- Pass `config_id` in the login dialog instead of `scope`. For user tokens, pass `config_id` alone. [S13]
+- You cannot request `email` or `public_profile` alone. Add at least one other supported permission. [S13]
+- Advanced Access to `public_profile` is required before a Login for Business app goes live. [S13]
+- BISU (business integration system user) tokens are for Tech Providers only. They use `response_type=code` and `override_default_response_type=true`. [S13] We do not need them for v1.
+- Redirect URIs: the Login for Business page gives no setup steps. UNVERIFIED. Add every callback URL under Valid OAuth Redirect URIs in the dashboard.
+- Privacy policy URL, app icon, category, business email and platforms must be set in App Settings for review. [S15]
+- Data deletion: set a Data Deletion Request URL (HTTPS callback) or a deletion instructions URL in Basic Settings. [S17]
+- App modes: Development and Live. In Development, test users can grant any permission. In Live, only approved permissions. [S19]
+- Test users: max 10 per app. They only interact with other test users or users with Admin, Developer or Tester roles. [S19]
+- Test pages: test users can only use app-scoped test pages. Details are on a linked page we did not read. UNVERIFIED. [S19]
+- Standard Access is automatic for Business apps. It works only for users with a role on the app. [S20]
+
+## 3. OAuth
+
+Authorize dialog and token endpoint:
+
+- Authorize URL: UNVERIFIED in the pages read. The docs refer to "the login dialog" and "manual login flow". Confirm at /docs/facebook-login/guides/advanced/manual-flow.
+- Token exchange: `GET {graph-api-version}/oauth/access_token`. Do this on the server, never in the client. [S12]
+- Code flow: `oauth/access_token` with `code`, `client_id`, `redirect_uri`. [S12]
+
+Scopes (permissions):
+
+| Need | Permission |
+|---|---|
+| List Pages | `pages_show_list` [S10] |
+| Publish posts, photos | `pages_manage_posts` (needs `pages_read_engagement`, `pages_show_list`) [S10] |
+| Read Page content | `pages_read_engagement` [S10] |
+| Publish video | `publish_video`, "only if publishing video" [S2][S10] |
+| Comments (later) | `pages_manage_engagement`, `pages_read_user_content` [S10] |
+| Webhook subscribe | `pages_manage_metadata` [S16][S21] |
+| System user tokens | `business_management` [S8][S10] |
+
+Token steps:
+
+1. User logs in. App gets a short-lived user token. [S13]
+2. Exchange it: `grant_type=fb_exchange_token`, `client_id`, `client_secret`, `fb_exchange_token`. Response has `access_token`, `token_type`, `expires_in`. [S12]
+3. Long-lived user token lasts about 60 days (sample `expires_in` 5183944). The new token is a different string, so replace the stored one. [S12]
+4. Get Page tokens: `GET {version}/{app-scoped-user-id}/accounts?access_token={long-lived-user-token}`. Response has Page `access_token`, `id`, `name`, `category`, `tasks`. [S12] Graph Explorer example uses `/me/accounts`. [S1b]
+5. Long-lived Page tokens "have no expiration date but can expire or be invalidated under certain conditions". [S12]
+
+Debug a token: `GET /v26.0/debug_token?input_token={token}` with an app access token or an app developer's user token. Fields: `is_valid`, `expires_at`, `data_access_expires_at`, `scopes`, `granular_scopes`, `profile_id` (Page ID for Page tokens), `user_id`, `error`. [S22]
+
+Invalidation events (OAuthException code 190): [S23]
+
+- Subcode 463: token expired.
+- Subcode 460: user logged out or changed password.
+- Subcode 458: user removed the app or never authorized it.
+- "Security events" can invalidate a token early.
+- 90-day inactivity rule: the SDK refresh text says tokens refresh if the person used the app in the last 90 days. [S12] That is for SDK refresh only. A rule for server Page tokens is UNVERIFIED.
+- Meta does not notify you. Catch errors and run `debug_token`. [S23]
+- Permission removal and loss of the Page role: not listed as a cause on the page. UNVERIFIED. Treat as invalid and ask the user to reconnect.
+- An expired token cannot be exchanged. The user must log in again. [S12]
+
+## 4. Publishing endpoints
+
+All calls use a Page access token from a user with `CREATE_CONTENT`. [S3][S4][S6]
+
+Text or link post, POST /\{page-id\}/feed: [S3]
+
+- `message`, `link`, `published` (default true), `scheduled_publish_time`.
+- Response: `{"id": "post-id"}`.
+- Link preview overrides: `name`, `description`, `picture`, `thumbnail`. Custom link images need a Page token and a link owned by the Page. [S3]
+- A post fails if the app or viewer cannot see the `link` URL. [S3]
+- Text length limit: UNVERIFIED (not in docs read).
+
+Photo, POST /\{page-id\}/photos: [S4]
+
+- `url` (public URL) or a multipart file attachment.
+- `published` (default true). `caption` is the text.
+- `temporary=true` is for photos of a scheduled post. It needs `published=false` and no `scheduled_publish_time`.
+- Formats: .jpeg, .bmp, .png, .gif, .tiff. Max 10 MB. Keep PNG under 1 MB.
+- Response: `id` (photo) and `post_id`.
+- Multi-photo: see Overview. Verify `attached_media` in a test before we build it.
+
+Video, POST /\{page-id\}/videos: [S5][S6]
+
+- Simple: `source` (form data file) or `file_url` (cannot combine with `upload_phase`). [S6]
+- Chunked: `upload_phase` = `start`, `transfer`, `finish` (also `cancel`). Params: `file_size`, `start_offset`, `upload_session_id`, `video_file_chunk` (required in transfer). [S6]
+- Chunk size rules, max file size, max duration: not stated in docs read. UNVERIFIED. [S5][S9][S6]
+- Other fields: `title`, `description`, `published`, `scheduled_publish_time` (10 min to 6 months for videos). [S6]
+- Resumable Upload API (generic): `POST /<APP_ID>/uploads` with `file_name`, `file_length`, `file_type` returns `upload:<ID>`. Then `POST /upload:<ID>` with header `file_offset: 0` and `Authorization: OAuth <USER_TOKEN>`. It returns file handle `h`. `GET /upload:<ID>` returns `file_offset` to resume. [S9]
+- Then publish: `POST /<PAGE_ID>/videos` with `title`, `description`, `fbuploader_video_file_chunk` (the handle). Needs a User token for the upload. [S5]
+- Upload formats: mp4, pdf, jpeg, jpg, png. [S5][S9]
+- Host `graph-video.facebook.com` is deprecated. Use `graph.facebook.com`. [S24]
+- Success returns only the video ID. No processing status in this guide. [S5]
+
+Reels, POST /\{page-id\}/video_reels: [S7]
+
+1. Start: `upload_phase=start`. Returns `video_id` and `upload_url`.
+2. Upload to `rupload.facebook.com/video-upload/{video-id}`. Local file: headers `Authorization: OAuth {token}`, `offset: 0`, `file_size`. Hosted file: header `file_url` (http/https, no auth, host must allow `facebookexternalhit/1.1`, no fbcdn URLs).
+3. Optional status: `GET /{video-id}?fields=status`. Values: uploading, upload_complete, upload_failed, processing, ready, error, expired.
+4. Finish: `upload_phase=finish`, `video_id`, `video_state` (`DRAFT`, `SCHEDULED`, `PUBLISHED`), `description`, `title`.
+5. Reel scheduling: `video_state=SCHEDULED` plus `scheduled_publish_time` more than 10 min ahead and within 29 days.
+6. Optional `is_ai_generated`, `place`.
+
+Reel specs: [S7]
+
+- MP4, 9:16, 1080x1920 recommended, 540x960 minimum.
+- 24 to 60 fps, fixed, progressive.
+- Duration 3 to 90 seconds.
+- H.264 or H.265 (VP9, AV1 also supported), 4:2:0, closed GOP 2 to 5 s.
+- Audio AAC-LC, stereo, 48 kHz, 128 kbps or more.
+- File size limit: not stated. UNVERIFIED.
+- Privacy: only Public for Page publishing.
+- Errors: 1363040 aspect ratio, 1363127 resolution, 1363128 duration, 1363129 frame rate, 100 missing parameter.
+
+Stories: [S8]
+
+- Photo: upload `POST /{page-id}/photos` with `published=false`, then `POST /{page-id}/photo_stories` with `photo_id`.
+- Video: `POST /{page-id}/video_stories` start, upload to rupload, then finish (same shape as Reels).
+- Media must not be used in a previously published post.
+- Video story max 60 s when made from a reel. Specs match Reels. Photos max 10 MB.
+- List: `GET /{page-id}/stories`.
+
+Native scheduling window (official pages disagree, so check in a test):
+
+- Posts guide: 10 minutes to 30 days from the request. `published=false` is required. Accepts UNIX seconds, ISO 8601, or strtotime strings. [S2]
+- Feed reference: 10 minutes to 75 days. [S3]
+- Videos reference: 10 minutes to 6 months. [S6]
+- Reels: more than 10 minutes, within 29 days. [S7]
+- Safe rule for Postit: allow 10 minutes to 29 days for all types.
+
+Other items:
+
+- Idempotency key: none documented. UNVERIFIED. Dedupe on our side before calling.
+- Post URL after success: not documented in pages read. UNVERIFIED. The feed returns the post `id` (format `{page-id}_{post-id}`); read back with `fields=permalink_url` and verify in a test.
+- Caption and text limits: UNVERIFIED.
+
+## 5. Rate limits & quotas
+
+- Page-level (Page or system user tokens): calls per rolling 24 hours = 4800 x number of engaged users. Engaged = engaged with the Page in the past 24 hours. [S25]
+- User and app tokens follow Platform limits: app = 200 x number of users per rolling hour. User values are not disclosed. [S25]
+- BUC limits apply to Pages calls made with Page or system user tokens. BUC wins over Platform limits. [S25]
+- Headers: `X-App-Usage` and `X-Business-Use-Case-Usage` (has `estimated_time_to_regain_access` in minutes). `X-Page-Usage` not confirmed. [S25]
+- Reels: 30 API-published posts per 24-hour moving period. Meta says to enforce this in your app, especially for scheduled posts. [S7]
+- Reels collaborator invites: 10 per Page per 24 hours. [S7]
+- Video upload limits (size, duration, count): UNVERIFIED.
+- Error codes: [S25]
+  - 4: app limit reached.
+  - 17: user limit reached.
+  - 32: user or app limit on a Pages request with a User token.
+  - 613: custom rate limit.
+  - 80001: Page or system user token hit its BUC limit.
+
+## 6. Webhooks/events
+
+- Page fields we need: `feed` (posts, shares, likes; not sent for Ad Posts) and `videos`. Also `live_videos`, `mention`. [S16]
+- The Video API says `feed` and `videos` report publish status. Videos uploaded as `secret` or `no_story` send no notice. [S24]
+- Subscribe a Page: `POST /{page-id}/subscribed_apps` with `subscribed_fields`. Needs a Page token (task `CREATE_CONTENT`, `MANAGE` or `MODERATE`), `pages_manage_metadata`, `pages_show_list`. Returns `{success: bool}`. [S21]
+- Endpoint: HTTPS with a valid certificate. Self-signed is not supported. [S26]
+- Verification: Meta sends GET with `hub.mode=subscribe`, `hub.challenge`, `hub.verify_token`. Check the token and reply with the challenge. [S26]
+- Signature: POST has `X-Hub-Signature-256: sha256=...` (HMAC of payload with app secret). Optional but recommended. [S26]
+- Reply 200 to every event. Retries for 36 hours, then dropped. Handle duplicates. Batches up to 1,000 updates. [S26]
+- Deauthorize callback: not covered in the page read. UNVERIFIED.
+- Data deletion callback: Meta POSTs `signed_request` (payload has `user_id`, `algorithm`, `expires`, `issued_at`). Verify HMAC-SHA256 with app secret. Delete data. Reply JSON `{ url, confirmation_code }`. The URL must be HTTPS. [S17]
+
+## 7. App review / verification
+
+Current status for us: Meta business verification IN PROGRESS (founder). App Review NOT STARTED.
+
+- Access levels: Standard (automatic for Business apps, role holders only) and Advanced (any user, needs Business Verification, and App Review per permission). [S20]
+- Apps with Advanced Access must complete an annual Data Use Checkup. [S20]
+- App Review is needed if anyone without a role on the app will use it. [S15]
+- Permissions we need to request: `pages_manage_posts`, `pages_read_engagement`, `pages_show_list`, `publish_video` (and `pages_manage_metadata` for webhooks). The permissions page lists use case and screencast fields for them but does not say "required" in plain words. [S10] The Video API says all its permissions require App Review. [S24]
+- Business verification is required for Advanced Access (since 2023). [S14][S27]
+- Steps: App Dashboard > Settings > Basic > Verification. An app Admin connects a Business. A Business Admin completes verification in Business Manager. [S27]
+- Accepted documents: not listed in the official page read. See Business Manager Help Center "About Business Verification". UNVERIFIED. [S27]
+- Review needs a working app and testing instructions. Meta rejects the whole submission if it cannot test the app. [S14][S15]
+- Screencast rules: the pages read did not give details. The Pages API page says reviews need use cases and screencasts. [S1] Detailed rules UNVERIFIED.
+- Before approval: use people with roles on the app (Admin, Developer, Tester) and test users. [S15][S19][S20]
+- Typical timeline: UNVERIFIED (no official figure).
+- Tech Provider verification: not covered in pages read. UNVERIFIED. Needed if we use BISU tokens. [S13]
+
+## 8. Costs
+
+- No fee for the Pages API, Graph API publishing or webhooks was found in the official pages read. Expected free. UNVERIFIED as an explicit statement.
+
+## 9. Gotchas
+
+- Page token vs user token: publishing needs a Page token. The upload session in the Resumable Upload API uses a User token. [S5][S9]
+- Never put the app secret in a client call. Exchange tokens on the server. [S12]
+- Scheduling windows differ between official pages (30 days, 75 days, 6 months). Use 10 min to 29 days. [S2][S3][S6][S7]
+- `published` is not supported with `actions`. [S3]
+- `tags` need `place`. `child_attachments` need 2 to 5 items. [S3]
+- Link posts fail if Meta cannot see the URL. Link preview scraping rules: UNVERIFIED beyond that. [S3]
+- Video processing wait: the publish guide has no status call. For Reels use `GET /{video-id}?fields=status` and wait for `ready`. [S5][S7]
+- Hosted Reel/Story files: the host must allow `facebookexternalhit/1.1`. fbcdn URLs are rejected. [S7][S8]
+- Reels from Meta CDN, copyright check: `copyright_check_information` field needs `pages_read_engagement`. [S7]
+- Reels: 30 posts per 24 hours per Page, and finish step must use `video_state`. [S7]
+- Only the app that made a post can edit it. [S2]
+- Graph API versions: v20.0 sunset 2026-09-24 (past). v21.0 ends 2027-01-21. v22.0 ends 2027-05-20. v23.0 ends 2027-10-08. v24.0 ends 2028-02-18. v25.0 ends 2028-07-29. v26.0 released 2026-07-29. Pin a version, for example v26.0. [S18]
+- Changes 2025-2026: the changelog lists no Pages publishing change in the 2025 out-of-cycle page (only oEmbed changes from 2025-11-03). The 2026 out-of-cycle page returned 404. Other changes UNVERIFIED. [S18][S28]
+- Community reports say long-lived tokens can be invalidated before 60 days. This is from a forum, not an official rule. Plan for reconnect flows. [S23 for the official "security events" text]
+- Test users are limited to 10 and cannot be converted to real users. [S19]
+
+## 10. Sources
+
+All read on 2026-10-27.
+
+- S1 https://developers.facebook.com/docs/pages-api (S1b: https://developers.facebook.com/docs/pages-api/getting-started)
+- S2 https://developers.facebook.com/docs/pages-api/posts
+- S3 https://developers.facebook.com/docs/graph-api/reference/page/feed
+- S4 https://developers.facebook.com/docs/graph-api/reference/page/photos
+- S5 https://developers.facebook.com/docs/video-api/guides/publishing
+- S6 https://developers.facebook.com/docs/graph-api/reference/page/videos
+- S7 https://developers.facebook.com/docs/video-api/guides/reels-publishing
+- S8 https://developers.facebook.com/docs/page-stories-api
+- S9 https://developers.facebook.com/docs/graph-api/guides/upload
+- S10 https://developers.facebook.com/docs/permissions
+- S11 https://developers.facebook.com/docs/pages-api/overview
+- S12 https://developers.facebook.com/docs/facebook-login/guides/access-tokens/get-long-lived
+- S13 https://developers.facebook.com/docs/facebook-login/facebook-login-for-business
+- S14 https://developers.facebook.com/docs/resp-plat-initiatives/individual-processes/app-review/content
+- S15 https://developers.facebook.com/docs/resp-plat-initiatives/individual-processes/app-review
+- S16 https://developers.facebook.com/docs/graph-api/webhooks/reference/page
+- S17 https://developers.facebook.com/docs/development/create-an-app/app-dashboard/data-deletion-callback
+- S18 https://developers.facebook.com/docs/graph-api/changelog
+- S19 https://developers.facebook.com/docs/development/build-and-test/test-users
+- S20 https://developers.facebook.com/docs/graph-api/overview/access-levels
+- S21 https://developers.facebook.com/docs/graph-api/reference/page/subscribed_apps
+- S22 https://developers.facebook.com/docs/graph-api/reference/debug_token/
+- S23 https://developers.facebook.com/docs/facebook-login/access-tokens/debugging-and-error-handling
+- S24 https://developers.facebook.com/docs/video-api/overview/
+- S25 https://developers.facebook.com/docs/graph-api/overview/rate-limiting
+- S26 https://developers.facebook.com/docs/graph-api/webhooks/getting-started
+- S27 https://developers.facebook.com/docs/development/release/business-verification
+- S28 https://developers.facebook.com/docs/graph-api/changelog/non-versioned-changes/nvc-2025 (nvc-2026 returned 404)

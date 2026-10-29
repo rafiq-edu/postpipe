@@ -1,0 +1,16 @@
+{
+  "_unrecorded": "UNRECORDED: hand-written from pinterest.md section 4 (video upload flow), not recorded against a Standard account.",
+  "register": {
+    "media_id": "med-1",
+    "media_type": "video",
+    "upload_url": "https://pinterest-media-upload.s3-accelerate.amazonaws.com/",
+    "upload_parameters": {
+      "key": "videos/med-1",
+      "policy": "fake-policy",
+      "x-amz-signature": "fake-sig"
+    }
+  },
+  "processing": { "media_id": "med-1", "status": "processing" },
+  "succeeded": { "media_id": "med-1", "status": "succeeded" },
+  "failed": { "media_id": "med-1", "status": "failed" }
+}

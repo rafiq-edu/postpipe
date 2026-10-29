@@ -1,0 +1,7 @@
+{
+  "pages": [
+    { "items": [{ "id": "b-1", "name": "Recipes" }], "bookmark": "bm-1" },
+    { "items": [], "bookmark": "bm-2" },
+    { "items": [{ "id": "b-2", "name": "Travel" }], "bookmark": null }
+  ]
+}

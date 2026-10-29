@@ -1,0 +1,4 @@
+{
+  "title": "PostPipe docs",
+  "pages": ["index", "quickstart", "bring-your-own-app", "self-host", "platforms", "api"]
+}

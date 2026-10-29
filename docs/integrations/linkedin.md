@@ -1,0 +1,259 @@
+# LinkedIn integration
+
+Researched on 2026-10-27 from official Microsoft Learn docs only. Each fact has a source tag like [S3]. The tags map to the list in section 10. UNVERIFIED means the official docs did not state it.
+
+## 1. Overview
+
+- We can post as a **member** (personal profile, author `urn:li:person:{id}`) or as an **organization** (Company Page, author `urn:li:organization:{id}`). [S1]
+- Content types in the Posts API: text only, images, videos, documents, article (link), multiImage, poll. Carousels are sponsored (ads) only. Organic carousel is "currently not supported". [S1]
+- Celebration posts exist, but "can't be created through external api". [S12]
+- Multi-image: minimum 2 images, maximum 20. Not allowed for sponsored posts. [S5]
+- Mentions and hashtags work inside `commentary`. [S1]
+- NOT possible: organic carousels [S1]; URL scraping for article posts (we must send title, description and thumbnail ourselves) [S1]; changing Company Page access through the API [S11].
+- Posting into LinkedIn groups: not documented. UNVERIFIED. The `visibility` value `CONTAINER` mentions groups, but "find by container" is not supported in Posts API. [S12] [S13]
+- Commentary limit of 3000 characters: UNVERIFIED. The Posts API docs list error `FIELD_LENGTH_TOO_LONG` for `commentary` but give no number. [S1]
+- Legacy vs new:
+  - Legacy: `POST https://api.linkedin.com/v2/ugcPosts` plus `/v2/assets?action=registerUpload`. This is what the old "Share on LinkedIn" page still shows. [S2]
+  - New: versioned `POST https://api.linkedin.com/rest/posts`, `/rest/images`, `/rest/videos`, `/rest/documents`. "The Posts API replaces the ugcPosts API." [S1]
+  - Images API and Videos API replace the Assets API. [S3] [S4]
+- Post IDs can be `urn:li:share:...` or `urn:li:ugcPost:...`. [S1]
+
+## 2. App setup
+
+1. Create a LinkedIn Page for the company first. [S11]
+2. Create a developer app at https://www.linkedin.com/developers/apps/new and link it to that Page. [S11] [S15]
+3. A Page super admin must verify the app. Required for Community Management API. [S9]
+4. Add products on the app's Products tab. [S10] [S11]
+
+| Product | Gives | Access |
+|---|---|---|
+| Sign In with LinkedIn using OpenID Connect | `openid`, `profile`, `email` | Self-serve [S10] |
+| Share on LinkedIn | `w_member_social` | Self-serve [S10] |
+| Community Management API | Company Page posting and analytics, `w_organization_social` and more | Vetted. Application plus review. Development tier then Standard tier [S8] [S9] |
+| Advertising API | Ads. We do not need it | Must be approved [S10] |
+
+- Redirect URLs: set on the Auth tab. They must be `https`, absolute, with no `#`. Query parameters are ignored. [S6]
+- Privacy policy URL: needed in the access request form and checked at Standard tier review. [S9]
+- The app name and logo must not contain "LinkedIn" or "Microsoft" names or logos (for example "Linked" or "In"). [S9]
+
+## 3. OAuth
+
+Flow: 3-legged authorization code. [S6]
+
+- Authorize: `GET https://www.linkedin.com/oauth/v2/authorization` with `response_type=code`, `client_id`, `redirect_uri`, `state`, `scope` (space separated, URL encoded). [S6]
+- Token: `POST https://www.linkedin.com/oauth/v2/accessToken`, form encoded, with `grant_type=authorization_code`, `code`, `client_id`, `client_secret`, `redirect_uri`. [S6]
+- The code lives 30 minutes. [S6]
+- If scopes change, users must re-authorize. A different scope request invalidates earlier tokens. [S6]
+- PKCE: the OAuth page does not mention PKCE. We send `client_secret` from our server. PKCE support is UNVERIFIED. [S6]
+- Optional: `enable_extended_login=true` for Google/Apple/passkey login outside desktop and Android web. [S6]
+
+| Scope | Use | Source |
+|---|---|---|
+| `openid`, `profile`, `email` | Sign-in, name, picture, email | [S7] |
+| `w_member_social` | Post, comment, like as a member | [S10] |
+| `w_organization_social` | Post as an org. Member needs ADMINISTRATOR, DIRECT_SPONSORED_CONTENT_POSTER or CONTENT_ADMIN role | [S1] |
+| `r_organization_social` | Read org posts, comments, likes | [S1] |
+| `rw_organization_admin` | Manage org pages, reporting. Needed for org webhooks | [S11] [S16] |
+| `r_member_social` | Read member posts. Closed. Not accepting requests | [S8] |
+| `r_basicprofile` | Appears in doc examples only. Whether we can get it is UNVERIFIED | [S6] |
+
+**Token lifetime**
+- Access token: 60 days (`expires_in: 5184000`). [S6]
+- Refresh token: "available for a limited set of partners". Programmatic refresh is for "approved Marketing Developer Platform (MDP) partners". Self-serve apps do not get one. [S6] [S14]
+- Where it is on: 365-day refresh token, fixed. A refresh gives a new 60-day access token but does NOT extend the refresh token. After 365 days the member must authorize again. [S14]
+- Whether a Community Management API app gets programmatic refresh: UNVERIFIED. Check the token response for `refresh_token`.
+- LinkedIn "reserves the right to revoke" tokens at any time. Always keep the re-auth path. [S14]
+- Without refresh: the doc says you can run the authorize flow again. The consent screen is skipped if the member is still logged in to linkedin.com and the token has not expired. [S6]
+
+**Member URN**
+- Call `GET https://api.linkedin.com/v2/userinfo` with the access token (needs `openid profile`). The `sub` field is the member identifier. [S7]
+- Build `urn:li:person:{sub}`. The doc says to use the Person URN from the sign-in page but does not state this mapping in one sentence. Confirm with a test call. UNVERIFIED. [S2] [S7]
+- Older way: `/v2/me` `id`. The Posts doc points to the "Retrieve Current Member's Profile API". [S12]
+
+**Organization URNs**
+- `GET https://api.linkedin.com/rest/organizationAcls?q=roleAssignee&role=ADMINISTRATOR&state=APPROVED` with headers `Linkedin-Version` and `X-Restli-Protocol-Version: 2.0.0`. [S11]
+- Each element has `organization: "urn:li:organization:1234123"`. [S11]
+- Needs `rw_organization_admin` or `r_organization_admin`. [S11]
+
+## 4. Publishing endpoints
+
+Base: `https://api.linkedin.com/rest/`. Required headers on every call:
+- `Linkedin-Version: YYYYMM`
+- `X-Restli-Protocol-Version: 2.0.0`
+- `Authorization: Bearer {token}`
+- `Content-Type: application/json` [S1]
+
+**Version to pin today**
+- Latest is `202610` (October 2026). [S17]
+- Monthly releases, each supported "a minimum of one year". No default version. A missing or sunset version returns an error. [S17]
+- `202511` sunsets on **2026-11-16**. Do not use it. [S17]
+- Recommendation: pin `202610` now. Sunset date for 202610 is not published. Assume about 2027-10. UNVERIFIED.
+
+**Text post** [S1]
+```json
+POST https://api.linkedin.com/rest/posts
+{
+  "author": "urn:li:organization:5515715",
+  "commentary": "Sample text Post",
+  "visibility": "PUBLIC",
+  "distribution": {"feedDistribution": "MAIN_FEED", "targetEntities": [], "thirdPartyDistributionChannels": []},
+  "lifecycleState": "PUBLISHED",
+  "isReshareDisabledByAuthor": false
+}
+```
+- Success is `201`. The post ID is in the `x-restli-id` response header, for example `urn:li:share:6844785523593134080`. [S1]
+- `visibility`: `PUBLIC`, `CONNECTIONS`, `LOGGED_IN`, `CONTAINER`. `lifecycleState` on create must be `PUBLISHED`. [S12]
+- Org posts must be `PUBLIC` for webhook events to fire. [S16]
+
+**Image** [S3]
+1. `POST /rest/images?action=initializeUpload` with `{"initializeUploadRequest":{"owner":"urn:li:organization:5583111"}}`. Response gives `uploadUrl` and `image` (`urn:li:image:...`).
+2. Upload the bytes to `uploadUrl`. The docs link to the old Assets guide for this step. The doc example for documents uses `curl --upload-file` (HTTP PUT) with the bearer token. [S3] [S18]
+3. Create the post with `"content": {"media": {"altText": "...", "id": "urn:li:image:..."}}`.
+- Limits: under 36,152,320 pixels. JPG, GIF, PNG. GIF up to 250 frames. Alt text max 4,086 characters, under 120 recommended. [S3]
+- Max file size in bytes: UNVERIFIED.
+- Check `status` with GET until `AVAILABLE` (values: `PROCESSING`, `PROCESSING_FAILED`, `AVAILABLE`, `WAITING_UPLOAD`). [S3]
+- `w_member_social` alone cannot GET `/rest/images`. It is write only. [S3]
+
+**Multi-image** [S5]
+```json
+"content": {"multiImage": {"images": [{"id": "urn:li:image:C4D22AQFttWMAaIqHaa", "altText": "..."}, {"id": "urn:li:image:..."}]}}
+```
+2 to 20 images, same pixel and format limits as single image. Organic only.
+
+**Video** [S4]
+1. `POST /rest/videos?action=initializeUpload` with `owner`, `fileSizeBytes` (required), `uploadCaptions`, `uploadThumbnail`.
+2. Response has `video` URN, `uploadToken`, and `uploadInstructions[]` with `firstByte`, `lastByte`, `uploadUrl`. Parts are 4 MB (4,194,304 bytes), first part is 0 to 4194303.
+3. PUT each part (`Content-Type: application/octet-stream`). Save the `ETag` header from each response.
+4. `POST /rest/videos?action=finalizeUpload` with `{"finalizeUploadRequest":{"video":"urn:li:video:...","uploadToken":"","uploadedPartIds":[<ETags in order>]}}`.
+5. Poll GET `/rest/videos/{urn}` until `status` is `AVAILABLE`. On failure see `processingFailureReason`.
+6. Post with `"content": {"media": {"title": "...", "id": "urn:li:video:..."}}`.
+- Limits: length 3 seconds to 30 minutes. File 75 KB to 500 MB. MP4. [S4]
+- The same page also says "Maximum allowed Videos size is 5GB" in the `fileSizeBytes` field. The two numbers conflict. Use 500 MB as the safe limit. [S4]
+- Upload URLs expire, typically 30 days after init. Expired URL gives `401`/`EXPIRED_UPLOAD_URL`. [S4]
+- Captions: one file, English only. Thumbnail optional. [S4]
+
+**Document (PDF)** [S18]
+- `POST /rest/documents?action=initializeUpload`, upload to `uploadUrl`, then post with `"content": {"media": {"title": "Example.pdf", "id": "urn:li:document:..."}}`. `title` is required.
+- Limits: 100 MB and 300 pages. PPT, PPTX, DOC, DOCX, PDF.
+
+**Article / link** [S1]
+```json
+"content": {"article": {"source": "https://example.com", "thumbnail": "urn:li:image:C49klciosC89", "title": "...", "description": "..."}}
+```
+Upload the thumbnail with the Images API first. LinkedIn does not scrape the URL.
+
+**Mentions and hashtags** [S1] [S19]
+- Org mention: `Hello @[Devtestco](urn:li:organization:2414183)`. The text must match the org name exactly, case sensitive.
+- Member mention: `@[Eddy](urn:li:person:1234)`. Matching one name part is enough.
+- Hashtag: `#coding` or the template `{hashtag|\\#|MyTestTag}`.
+- Finding members to mention needs the People Typeahead API (Community Management). [S8]
+
+**Scheduling, drafts, edits**
+- Native scheduling: none documented. `lifecycleState` accepts only `PUBLISHED` on create. We must run our own scheduler. [S12]
+- Edit: `POST /rest/posts/{urn}` with `X-RestLi-Method: PARTIAL_UPDATE`. Only `commentary`, CTA label, landing page, `lifecycleState`, and `adContext` can change. `204` on success. [S1]
+- Delete: `DELETE /rest/posts/{urn}`. Idempotent. Repeated delete returns `204`. [S1]
+
+**Idempotency**
+- No idempotency key for create is documented. UNVERIFIED. Store our own post ID and the returned `x-restli-id`. Do not blind-retry a `5xx` on create. Check the author's recent posts first (`GET /rest/posts?author=...&q=author`, needs `r_organization_social` for orgs; `r_member_social` for members is closed). [S1]
+- `409 CONFLICT` means a write conflict. Retry. [S1]
+
+**Post URL**
+- Build `https://www.linkedin.com/feed/update/{urn}/` from the `x-restli-id` value. [S1]
+
+## 5. Rate limits & quotas
+
+- Limits are per 24 hours, reset at midnight UTC. Two kinds: application and member. [S20]
+- Standard limits are "not published". Read them in Developer Portal, app, Analytics tab, after one test call per endpoint. [S20]
+- Share on LinkedIn (legacy page): member 150 requests per day, application 100,000 per day. [S2]
+- Community Management Development tier: per app 500, per member 100 (raised from 100 and 10). [S8]
+- Standard tier numbers: UNVERIFIED (not published).
+- Daily post count cap: not published. UNVERIFIED.
+- Over limit: `429 TOO_MANY_REQUESTS`. Back off and retry later. Some `429` can come from infrastructure protection and clear by themselves. [S1] [S20]
+- Alert email at 75% of the app-level quota, 1 to 2 hours late. [S20]
+- Image/video upload byte limits: see section 4. No separate upload quota is documented. UNVERIFIED.
+
+## 6. Webhooks / events
+
+- Webhooks work only for apps "with an approved use case for webhooks". The Webhooks tab is hidden otherwise. [S21]
+- Register an HTTPS URL. LinkedIn sends `GET ?challengeCode=...`. We reply within 3 seconds with `challengeCode` and `challengeResponse = hex(HMACSHA256(challengeCode, clientSecret))`. Re-checked every 2 hours. After 3 failures the endpoint is blocked. [S21]
+- Each push has `X-LI-Signature`. Verify `hex(HMACSHA256("hmacsha256=" + rawBody, clientSecret))`. Dedupe by notification ID. Return 2xx. [S21]
+- Available product: Organization Social Action Notifications (`eventType ORGANIZATION_SOCIAL_ACTION_NOTIFICATIONS`). Needs `rw_organization_admin` by an org ADMINISTRATOR. Events: `LIKE`, `COMMENT`, `SHARE`, `SHARE_MENTION`, `ADMIN_COMMENT`, `COMMENT_EDIT`, `COMMENT_DELETE`. Batches of 10. Retries every 5 minutes for 8 hours. Pull API keeps 60 days. [S16]
+- No webhooks for member posts are documented. UNVERIFIED.
+- No dedicated token revocation event. Instead, subscriptions are removed when the member's grant expires or is revoked, or when the member stops being admin. We detect it by `401` (grant gone) or `403` (no longer admin) on API calls. [S16]
+- For analytics we must poll. No publish-status webhook is documented. Poll GET post and GET video status instead. UNVERIFIED for any push.
+
+## 7. App review / verification
+
+| Item | Self-serve or reviewed | Source |
+|---|---|---|
+| Sign In with LinkedIn (OIDC) | Self-serve | [S10] |
+| Share on LinkedIn (member posting) | Self-serve | [S10] |
+| Community Management API | Reviewed. "Vetted Product with development and standard tiers" | [S8] |
+| Advertising API | Must be approved | [S10] |
+
+Community Management API process [S9]:
+- Only for registered legal organizations, commercial use cases only.
+- Needs a verified business email (personal email fails), legal name, registered address, website, privacy policy.
+- A super admin of the linked Page must verify the app.
+- Development tier review checks: approved use case, verified email, verified organization, website and domain, app verified by Page.
+- If rejected, you cannot re-apply with the same app. Create a new app.
+- Standard tier upgrade needs: the app fully integrated, company and product overview, use case description, test credentials, and a screencast of each use case. For Page management: full OAuth flow, posting to a Page, how comments show, which commenter data we display. For member posting (Executive Management, Employee Advocacy): the same on a profile.
+- Review timeline: not published. UNVERIFIED.
+- Dev tier limits: "limited API call volume" (500 per app, 100 per member per day). The "about 5 organizations or members" cap is UNVERIFIED. [S8]
+- If our product is a multi-tenant API for customers' Pages, whether LinkedIn accepts it as a use case is not stated. Check the restricted use cases page before applying. [S11]
+- Pitfall: the Community Management API option is greyed out for apps that already have other products. Use a new app. [S8]
+- Member profile posting: the `w_member_social` self-serve path posts to personal profiles. The Community Management use cases "Executive Management" and "Employee Advocacy" cover profile posting at scale. [S9]
+
+**Current status for us: NOT STARTED.**
+
+## 8. Costs
+
+- No fee for API access is stated anywhere in the docs we read. Expected free. UNVERIFIED as a pricing statement.
+
+## 9. Gotchas
+
+- **Version sunsets**: every version lives about 12 months. `202511` dies 2026-11-16. Put the version in config, calendar a yearly upgrade, and read the Recent Changes page. [S17]
+- **No refresh for self-serve apps**: 60-day access token, no refresh token. Users must re-authorize every 60 days. Warn them 7 days before expiry and mark the account "needs reconnect". [S6] [S14]
+- **Refresh token does not extend**: even with refresh, the 365-day window is fixed. [S14]
+- **Scope change = re-auth**: adding a scope later forces every user to consent again. Ask for `w_member_social` and org scopes up front if both are planned. [S6]
+- **Different scope invalidates old tokens** for that member. [S6]
+- **ugcPosts is legacy**: do not build on `/v2/ugcPosts` or `/v2/assets`. A removal date is not stated in the pages we read. UNVERIFIED. [S1] [S2]
+- **Organization posting needs Community Management API** plus an admin-role member. Self-serve `w_member_social` is not enough. [S1] [S8]
+- **Escaping**: in `commentary`, these characters must be escaped with a backslash: `|` `{` `}` `@` `[` `]` `(` `)` `<` `>` `#` `\` `*` `_` `~`. Unescaped text can turn into mentions or hashtags, or be cut. [S19]
+- **JSON double escape**: a literal `\*` must be written `\\*` in JSON. [S19]
+- **Image/video processing is async**. Wait for `AVAILABLE` before posting. Posting a not-ready asset gives `MEDIA_ASSET_PROCESSING_FAILED` or `MEDIA_ASSET_WAITING_UPLOAD`. [S4]
+- **Upload CDN/region delays**: not documented. UNVERIFIED. Retry the status check with backoff.
+- **Article thumbnails** must be uploaded by us. No link preview scraping. [S1]
+- **Download URLs expire** (`downloadUrlExpiresAt`). Do not store them. [S3]
+- **URNs in URLs must be URL-encoded** (`urn%3Ali%3Ashare%3A123`). [S1]
+- **Targeted posts** need an audience over 300 members. [S1]
+- **Closed scope** `r_member_social`: we cannot read a member's own posts or stats. [S8]
+- **Dev tier app is hard to upgrade**: a rejected app cannot re-apply. Keep a spare app. [S9]
+- **Changes in 2025 and 2026** (from Recent Changes, first 100,000 characters only): 202504 added Buy Now / Shop Now CTAs; 2025-09 added 75% rate alerts; 2025-10 added OAuth token usage in the portal; 2025-12 added Google/Apple/passkey sign-in; 202602 added video `templateName` and `linkbackContext`; 202605 changed analytics `metricType` to a string. The last 43,000 characters of the page were not read. [S22]
+
+## 10. Sources
+
+Read on 2026-10-27 unless noted.
+
+- [S1] https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/posts-api. Read on 2026-10-27
+- [S2] https://learn.microsoft.com/en-us/linkedin/consumer/integrations/self-serve/share-on-linkedin. Read on 2026-10-27
+- [S3] https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/images-api. Read on 2026-10-27
+- [S4] https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/videos-api. Read on 2026-10-27
+- [S5] https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/multiimage-post-api. Read on 2026-10-27
+- [S6] https://learn.microsoft.com/en-us/linkedin/shared/authentication/authorization-code-flow. Read on 2026-10-27
+- [S7] https://learn.microsoft.com/en-us/linkedin/consumer/integrations/self-serve/sign-in-with-linkedin-v2. Read on 2026-10-27
+- [S8] https://learn.microsoft.com/en-us/linkedin/marketing/community-management/community-management-overview. Read on 2026-10-27
+- [S9] https://learn.microsoft.com/en-us/linkedin/marketing/community-management-app-review. Read on 2026-10-27
+- [S10] https://learn.microsoft.com/en-us/linkedin/shared/authentication/getting-access. Read on 2026-10-27
+- [S11] https://learn.microsoft.com/en-us/linkedin/marketing/quick-start and https://learn.microsoft.com/en-us/linkedin/marketing/community-management/organizations/organization-access-control-by-role. Read on 2026-10-27
+- [S12] https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/post-api-schema. Read on 2026-10-27
+- [S13] https://learn.microsoft.com/en-us/linkedin/marketing/community-management/contentapi-migration-guide. Read on 2026-10-27
+- [S14] https://learn.microsoft.com/en-us/linkedin/shared/authentication/programmatic-refresh-tokens. Read on 2026-10-27
+- [S15] https://learn.microsoft.com/en-us/linkedin/shared/authentication/authentication. Read on 2026-10-27
+- [S16] https://learn.microsoft.com/en-us/linkedin/marketing/community-management/organizations/organization-social-action-notifications. Read on 2026-10-27
+- [S17] https://learn.microsoft.com/en-us/linkedin/marketing/versioning. Read on 2026-10-27
+- [S18] https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/documents-api. Read on 2026-10-27
+- [S19] https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/little-text-format. Read on 2026-10-27
+- [S20] https://learn.microsoft.com/en-us/linkedin/shared/api-guide/concepts/rate-limits. Read on 2026-10-27
+- [S21] https://learn.microsoft.com/en-us/linkedin/shared/api-guide/webhook-validation. Read on 2026-10-27
+- [S22] https://learn.microsoft.com/en-us/linkedin/marketing/integrations/recent-changes (partly read). Read on 2026-10-27

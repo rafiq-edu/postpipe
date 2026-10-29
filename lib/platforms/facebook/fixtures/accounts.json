@@ -1,0 +1,22 @@
+{
+  "data": [
+    {
+      "id": "page-1",
+      "name": "Page One",
+      "access_token": "page-token-1",
+      "tasks": ["CREATE_CONTENT", "MANAGE"]
+    },
+    {
+      "id": "page-2",
+      "name": "Page Two",
+      "access_token": "page-token-2",
+      "tasks": ["CREATE_CONTENT"]
+    },
+    {
+      "id": "page-3",
+      "name": "No Rights",
+      "access_token": "page-token-3",
+      "tasks": ["ANALYZE"]
+    }
+  ]
+}

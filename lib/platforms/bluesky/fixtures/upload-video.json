@@ -1,0 +1,7 @@
+{
+  "jobStatus": {
+    "jobId": "job-1",
+    "did": "did:plc:abc123",
+    "state": "JOB_STATE_CREATED"
+  }
+}

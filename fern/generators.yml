@@ -1,0 +1,20 @@
+api:
+  specs:
+    - openapi: openapi/openapi.json
+groups:
+  typescript:
+    generators:
+      - name: fernapi/fern-typescript-sdk
+        version: 3.105.2
+        output:
+          location: local-file-system
+          path: ../sdks/typescript
+  python:
+    generators:
+      - name: fernapi/fern-python-sdk
+        version: 5.41.2
+        output:
+          location: local-file-system
+          path: ../sdks/python
+        config:
+          client_class_name: PostPipeClient

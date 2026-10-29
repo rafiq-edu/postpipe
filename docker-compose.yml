@@ -1,0 +1,45 @@
+x-env: &env
+  AWS_ENDPOINT_URL: http://localstack:4566
+  AWS_REGION: us-east-1
+  AWS_ACCESS_KEY_ID: test # LocalStack documented dummy value, not a secret
+  AWS_SECRET_ACCESS_KEY: test
+  NEXT_PUBLIC_SUPABASE_URL: http://localhost:54321
+  SUPABASE_INTERNAL_URL: http://host.docker.internal:54321
+
+services:
+  web:
+    build:
+      context: .
+      target: web
+      args:
+        GIT_SHA: ${GIT_SHA:-dev}
+    ports: ["3000:3000"]
+    environment: *env
+    env_file:
+      - path: .env.local
+        required: false
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    depends_on: [localstack]
+
+  worker:
+    build:
+      context: .
+      target: worker
+      args:
+        GIT_SHA: ${GIT_SHA:-dev}
+    environment:
+      <<: *env
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-25}
+    env_file:
+      - path: .env.local
+        required: false
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    depends_on: [localstack]
+
+  localstack:
+    image: localstack/localstack:4.9
+    ports: ["4566:4566"]
+    environment:
+      SERVICES: s3
+    volumes:
+      - ./localstack/init.sh:/etc/localstack/init/ready.d/init.sh:ro

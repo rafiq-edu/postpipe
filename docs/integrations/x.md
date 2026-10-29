@@ -1,0 +1,178 @@
+# X (Twitter) integration
+
+Researched 2026-10-27. Official sources only. "UNVERIFIED" = not found in official docs.
+Note: devcommunity.x.com pages returned 403 to our fetcher. Facts taken from that forum come from search-result summaries, and the pages were not opened. They are marked (forum).
+
+## 1. Overview
+
+What we can publish with `POST /2/tweets` (https://docs.x.com/x-api/posts/creation-of-a-post):
+- Text. Required unless media is given.
+- Media: "up to 4 photos, 1 animated GIF, or 1 video" per post.
+- Polls: 2 to 4 options, 1 to 25 chars each, duration 5 to 10080 minutes.
+- Reply settings: `following`, `mentionedUsers`, `subscribers`, `verified`.
+- Threads: post one, then post the next with `reply.in_reply_to_tweet_id` set to the previous post ID.
+- Community posts: `community_id` (1 to 19 digits). `share_with_followers` exists for community posts (https://docs.x.com/changelog, Jul 28, 2025).
+- Long posts up to 25,000 chars: Premium accounts only (https://docs.x.com/fundamentals/counting-characters, via search; the exact text was not opened).
+- Extra flags: `made_with_ai`, `paid_partnership`, `nullcast`, `for_super_followers_only`, `geo`.
+
+Not possible or restricted:
+- Quote posts: "requires an Enterprise plan" and "is not available on self-serve (pay-per-use) tiers" (creation-of-a-post page).
+- Replies: only allowed when the original author "summoned" the replier (mention or quote). Self-serve tiers only (https://docs.x.com/changelog, Feb 23, 2026). This kills "reply to any post" features.
+- Following, Likes and Quote-Posts via API were removed from all self-serve tiers (changelog, Apr 16, 2026).
+- Native scheduling: no scheduling field in the request body. UNVERIFIED that none exists; we must keep our own scheduler.
+- Edit a post: `edit_options.previous_post_id`; changelog (Oct 3, 2025) says Premium, own post, within 1 hour.
+
+Alt text: The media metadata page https://docs.x.com/x-api/media/media-metadata returned 404. The Media Metadata endpoint is listed at $0.005 per request (https://docs.x.com/x-api/getting-started/pricing). Request shape for alt text: UNVERIFIED. The `media.description` field in POST /2/tweets is described only as "rendered on the Post card for video and Amplify content", not as alt text.
+
+## 2. App setup
+
+- Developer Console: https://console.x.com . Sign in, click Create App, enter name, description and use case. Credentials are shown once (https://docs.x.com/resources/fundamentals/developer-apps).
+- Under User authentication settings, choose OAuth 2.0 and an app type: Web App (confidential), Automated App/Bot (confidential), Native App (public), Single Page App (public). Confidential gets a Client Secret. Public uses PKCE only. For Postit: Web App (same page).
+- Callback URL: exact match, up to 10, `https://` in production, `http://127.0.0.1` for local (not `localhost`) (same page).
+- Website URL, terms URL, privacy URL fields: not described in the docs we read. UNVERIFIED. We should have all three live anyway.
+- Tiers: there are no Free/Basic/Pro requirements now. New accounts use pay-per-use. See sections 7 and 8.
+- Use case is binding and reviewed; do not register multiple apps for one use case (https://docs.x.com/developer-terms/policy).
+
+## 3. OAuth
+
+Flow: OAuth 2.0 Authorization Code with PKCE (https://docs.x.com/resources/fundamentals/authentication/oauth-2-0/authorization-code).
+- Authorize: `https://x.com/i/oauth2/authorize`
+- Token: `https://api.x.com/2/oauth2/token`
+- Required authorize params: `response_type`, `client_id`, `redirect_uri`, `state`, `code_challenge`, `code_challenge_method` (S256 or plain). Use S256.
+- Auth code is valid 30 seconds.
+- Scopes we need: `tweet.read`, `tweet.write`, `users.read`, `offline.access`, `media.write`. (`media.write` = "Upload media, such as photos and videos, on your behalf": https://docs.x.com/x-api/media/upload-media)
+- Access token lasts 2 hours unless `offline.access` is used. Without `offline.access` no refresh token is issued (authorization-code page).
+- Refresh: POST token URL with `grant_type=refresh_token`, `refresh_token`, `client_id`.
+- Refresh token lifetime: not stated in the docs page. UNVERIFIED (forum says about 6 months).
+- Rotation: the docs page does not say. Docs for token exchange say repeating the exchange "invalidates the previous pair" (https://docs.x.com/fundamentals/authentication/oauth-2-0/oauth-1-0a-token-exchange, via search). Forum reports refresh tokens are single use (forum). Treat as single use: save the new pair every time, and lock per user so two refreshes never run at once.
+- Revoke: `POST https://api.x.com/2/oauth2/revoke` with `token` and `client_id` (via search of https://docs.x.com/fundamentals/authentication/api-reference; page not opened). Whether it kills the paired token: UNVERIFIED.
+- OAuth 1.0a is not needed for posting. Media upload is v2 with `media.write`. Optional: exchange stored 1.0a tokens for OAuth 2.0 with `grant_type=urn:ietf:params:oauth:grant-type:token-exchange` at `POST /2/oauth2/token` (changelog, Sep 21, 2026).
+- v1.1 media upload sunset: Monday 9 June 2025 for self-serve (forum: https://devcommunity.x.com/t/media-upload-endpoints-update-and-extended-migration-deadline/241818). Not in docs.x.com changelog.
+
+## 4. Publishing endpoints
+
+Create post (response HTTP 201, `data.id`, `data.text`, `data.edit_history_post_ids`). Body example fields:
+```
+{"text": "...", "media": {"media_ids": ["..."]}, "reply": {"in_reply_to_tweet_id": "..."},
+ "poll": {"options": ["a","b"], "duration_minutes": 1440}, "quote_tweet_id": "...",
+ "reply_settings": "following", "community_id": "..."}
+```
+Extra top-level fields are rejected (`additionalProperties: false`). Source: creation-of-a-post page.
+
+Media upload v2, chunked (https://docs.x.com/x-api/media/quickstart/media-upload-chunked):
+1. INIT `POST /2/media/upload/initialize`, JSON `{"media_type":"video/mp4","total_bytes":1048576,"media_category":"tweet_video"}`
+2. APPEND `POST /2/media/upload/{id}/append`, form fields `segment_index` (from 0) and `media`.
+3. FINALIZE `POST /2/media/upload/{id}/finalize`
+4. STATUS `GET /2/media/upload?command=STATUS&media_id={id}`. Poll after `check_after_secs`. States: pending, in_progress, succeeded, failed.
+5. Then `POST /2/tweets` with `media.media_ids`.
+- Chunk: keep each at or below 5 MB; server maximum 8 MB.
+- Do not send `command=INIT/APPEND/FINALIZE` to `POST /2/media/upload`: "previous protocol".
+- Simple one-shot: `POST /2/media/upload` with `media` (base64 in JSON) and `media_category` (https://docs.x.com/x-api/media/upload-media). Categories for posts: `tweet_image`, `tweet_gif`, `tweet_video`.
+
+Media limits (same quickstart page): image 5 MB; GIF 15 MB; video 20 min / 8 GB default, 125 min / 16 GB for Premium or verified posting users. Limits follow the posting user, not our plan (changelog, Sep 1, 2026). Over limit gives 403.
+- Note: the old "140 s / 512 MB" video limit now applies only to `dm_video`. Do not use it for posts.
+- Image dimensions, accepted formats, aspect ratios: UNVERIFIED (not on pages read).
+
+Text: 280 weighted chars. Emoji and CJK count 2. Any URL counts 23. UTF-8, NFC (https://docs.x.com/fundamentals/counting-characters, via search). Premium: 25,000.
+
+Idempotency: none. No idempotency key field. Duplicate content returns 403 "You are not allowed to create a Tweet with duplicate content." (forum: https://devcommunity.x.com/t/you-are-not-allowed-to-create-a-tweet-with-duplicate-content/191600). Forum reports false positives and cases where the post was published but 403 was still returned. Before any retry, check the user's timeline.
+
+Post URL: build from the ID: `https://x.com/i/web/status/{id}` or `https://x.com/{username}/status/{id}`. Format UNVERIFIED in the docs; test it.
+
+## 5. Rate limits and quotas
+
+From https://docs.x.com/x-api/fundamentals/rate-limits:
+| Endpoint | Per app | Per user |
+|---|---|---|
+| POST /2/tweets | 10,000 / 24 h | 100 / 15 min |
+| POST /2/media/upload | 50,000 / 24 h | 500 / 15 min |
+
+- Headers: `x-rate-limit-limit`, `x-rate-limit-remaining`, `x-rate-limit-reset` (Unix time).
+- 429 body: `{"errors":[{"code":88,"message":"Rate limit exceeded"}]}`. Wait until reset, use backoff.
+- Media limits for the chunked append/finalize/status endpoints separately: UNVERIFIED.
+- Old per-tier monthly post caps (Free 500, Basic 3,000...) are gone from current docs. The only cap in the pricing docs is 3 million Post reads per month (https://docs.x.com/x-api/fundamentals/post-cap). No cap on post creates is set (pricing page).
+- Help page mentions an automation limit of "Posts and Reposts combined at 300 per 3 hours" for users (via search of https://help.x.com/en/rules-and-policies/x-automation; UNVERIFIED on the page itself).
+- 403 duplicate: see section 4.
+
+## 6. Webhooks and events
+
+- We do not need a webhook to publish. `POST /2/tweets` returns the post ID at once.
+- Account Activity API: docs disagree. The AAA intro lists Pay Per Use (3 subscriptions, 1 webhook) and Enterprise (https://docs.x.com/x-api/account-activity/introduction). The Enterprise pages list it as Enterprise-only (https://docs.x.com/enterprise-api/getting-started/pricing). Treat as Enterprise-only.
+- Filtered stream webhooks: Enterprise only (via search, https://docs.x.com/x-api/webhooks/stream/introduction).
+- Optional later: Activity API `post.create` events cost $0.005 each (pricing page). Not needed for v1.
+
+## 7. App review / verification
+
+- Sign up at https://console.x.com, then create an app. Docs do not describe a manual approval step for pay-per-use. Review queue or wait time: UNVERIFIED.
+- Use case must be disclosed and kept current; it is binding (https://docs.x.com/developer-terms/policy).
+- Consent: a login is not consent. Show exactly what will be published before posting (same policy page).
+- No sharing keys. White-label versions need separate approval from X (same page). Postit is close to white-label. Ask X via the Policy Support form.
+- AI-generated replies need prior approval (https://docs.x.com/developer-guidelines).
+- Scale: policy says Free, Basic and Pro plans are for "hobbyists, commercial prototyping, early-stage X product integrations, and supporting applications with limited end-users". Broader use needs Enterprise (policy page). The policy text may be older than pay-per-use. UNVERIFIED how X applies it to pay-per-use.
+- Free tier posting for other users: the Free tier is gone for new accounts (forum). Old docs said Free is non-commercial only (developer-guidelines, via fetch).
+- Current status for us: NOT STARTED.
+
+## 8. Costs
+
+Current model: pay-per-use, credits bought upfront, no subscription, no minimum (https://docs.x.com/x-api/getting-started/pricing).
+| Item | Price |
+|---|---|
+| Post: Create | $0.015 per request |
+| Post: Create with URL | $0.200 per request |
+| Post: Create (summoned reply) | $0.010 |
+| Media Metadata | $0.005 |
+| Read Posts | $0.005 per resource |
+| Read Users | $0.010 per resource |
+| Owned reads | $0.001 per resource |
+- Media upload price: UNVERIFIED (not in the pricing table; appears free).
+- Cap: 3 million Post reads per month; above that, Enterprise.
+- Spend limit per cycle can be set. Requests stop at zero credits.
+- Bonus: $20 credit after first card and purchase; first auto-recharge matched up to $50; credits expire 3 months after grant (changelog, Oct 2, 2026).
+- Changelog: pay-per-use launched Feb 6, 2026. Post create went to $0.015 and URL posts to $0.20 on Apr 16, 2026.
+- Legacy tiers (all from forum, search summaries only): Free is gone, Basic ($200/month) moved to pay-per-use after Jun 1, 2026, Pro ($5,000/month) moved after Sep 1, 2026. The official changelog still says Basic and Pro "remain available", so it is stale or conflicting. Founder should confirm in console.x.com.
+- Enterprise: custom quote, no public price (https://docs.x.com/enterprise-api/getting-started/pricing). Price UNVERIFIED.
+
+For Postit: pay-per-use is the entry. Cost per post is $0.015, or $0.20 if the text has a link. Example, 10,000 plain posts per month cost $150. The same posts with links cost $2,000. Who pays: we, or pass-through to developer customers. The per-app cap of 10,000 posts per 24 h is shared by all our users. Enterprise may be needed for scale, and for quote posts and Account Activity.
+
+## 9. Gotchas
+
+- Links cost 13x more ($0.20 vs $0.015). Model this in our pricing.
+- App-wide limit 10,000 post creates per 24 h across all tenants. Per user 100 per 15 min.
+- Video limits depend on each end user's Premium status. Check before upload; show a clear error on 403.
+- A successful upload does not guarantee the media can be attached (creation-of-a-post page).
+- Refresh tokens rotate; concurrent refresh can lock a user out (forum). Use a lock and save atomically.
+- Access tokens last only 2 hours. Refresh before each publish.
+- Duplicate content 403, with false positives. Never auto-retry blindly.
+- No quote posts, limited replies, no auto follow/like on self-serve.
+- Automation policy: https://help.x.com/en/rules-and-policies/x-automation . No identical content across accounts. API only, no scraping. Bots need the Automated label.
+- Bonus credits expire in 3 months.
+- Changes 2025-26 (https://docs.x.com/changelog): v2 media upload (Jan, Apr 2025); pay-per-use (Feb 2026); reply restrictions (Feb 2026); price change (Apr 2026); video limits tied to user (Sep 2026).
+- Docs are inconsistent (changelog vs forum on Basic/Pro; AAA availability). Re-check before launch.
+
+## 10. Sources (Read on 2026-10-27)
+
+- https://docs.x.com/x-api/introduction
+- https://docs.x.com/x-api/getting-started/about-x-api
+- https://docs.x.com/x-api/getting-started/pricing
+- https://docs.x.com/x-api/fundamentals/post-cap
+- https://docs.x.com/x-api/posts/creation-of-a-post
+- https://docs.x.com/x-api/posts/manage-tweets/introduction
+- https://docs.x.com/x-api/media/quickstart/media-upload-chunked
+- https://docs.x.com/x-api/media/upload-media
+- https://docs.x.com/x-api/media/media-metadata (404)
+- https://docs.x.com/resources/fundamentals/authentication/oauth-2-0/authorization-code
+- https://docs.x.com/resources/fundamentals/authentication/oauth-2-0/user-access-token (search result only)
+- https://docs.x.com/resources/fundamentals/developer-apps
+- https://docs.x.com/x-api/fundamentals/rate-limits
+- https://docs.x.com/changelog (first 100,000 chars)
+- https://docs.x.com/developer-guidelines
+- https://docs.x.com/developer-terms/policy
+- https://docs.x.com/enterprise-api/getting-started/pricing
+- https://docs.x.com/x-api/account-activity/introduction (search result only)
+- https://docs.x.com/fundamentals/counting-characters (search result only)
+- https://help.x.com/en/rules-and-policies/x-automation (search result only)
+- https://devcommunity.x.com/t/media-upload-endpoints-update-and-extended-migration-deadline/241818 (403, search summary only)
+- https://devcommunity.x.com/t/important-update-legacy-x-api-basic-plans-are-moving-to-pay-per-use-ppu/266305 (403, search summary only)
+- https://devcommunity.x.com/t/important-update-legacy-x-api-pro-plans-are-moving-to-pay-per-use-ppu/273255 (403, search summary only)
+- https://devcommunity.x.com/t/announcing-the-launch-of-x-api-pay-per-use-pricing/256476 (403, search summary only)
+- https://devcommunity.x.com/t/you-are-not-allowed-to-create-a-tweet-with-duplicate-content/191600 (search summary only)
